@@ -47,6 +47,7 @@ export class PhotonIMessage implements INodeType {
 				options: [
 					{ name: 'Message', value: 'message' },
 					{ name: 'Chat', value: 'chat' },
+					{ name: 'Poll', value: 'poll' },
 					{ name: 'Scheduled Message', value: 'scheduledMessage' },
 					{ name: 'Handle', value: 'handle' },
 				],
@@ -63,7 +64,10 @@ export class PhotonIMessage implements INodeType {
 				options: [
 					{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message to a chat' },
 					{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file attachment to a chat' },
+					{ name: 'Unsend Message', value: 'unsendMessage', action: 'Unsend a message', description: 'Retract a sent message' },
+					{ name: 'Edit Message', value: 'editMessage', action: 'Edit a message', description: 'Edit the text of a sent message' },
 					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback reaction to a message' },
+					{ name: 'Download Attachment', value: 'downloadAttachment', action: 'Download an attachment', description: 'Download a received file or media attachment' },
 					{ name: 'Search Messages', value: 'searchMessages', action: 'Search messages', description: 'Search messages by text content' },
 					{ name: 'Get Messages', value: 'getMessages', action: 'Get messages', description: 'Retrieve messages from a chat' },
 				],
@@ -190,6 +194,94 @@ export class PhotonIMessage implements INodeType {
 						type: 'boolean',
 						default: false,
 						description: 'Whether to send as a voice message',
+					},
+				],
+			},
+			// --- Unsend Message fields ---
+			{
+				displayName: 'Message GUID',
+				name: 'messageGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'GUID of the message to unsend',
+				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
+			},
+			{
+				displayName: 'Part Index',
+				name: 'unsendPartIndex',
+				type: 'number',
+				default: 0,
+				description: 'Index of the message part to unsend (0 for the first part)',
+				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
+			},
+			// --- Edit Message fields ---
+			{
+				displayName: 'Message GUID',
+				name: 'messageGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'GUID of the message to edit',
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+			},
+			{
+				displayName: 'New Text',
+				name: 'editedMessage',
+				type: 'string',
+				typeOptions: { rows: 4 },
+				required: true,
+				default: '',
+				description: 'The replacement text for the message',
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+			},
+			{
+				displayName: 'Part Index',
+				name: 'editPartIndex',
+				type: 'number',
+				default: 0,
+				description: 'Index of the message part to edit (0 for the first part)',
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+			},
+			// --- Download Attachment fields ---
+			{
+				displayName: 'Attachment GUID',
+				name: 'attachmentGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'GUID of the attachment to download',
+				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'downloadAdditionalFields',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
+				options: [
+					{
+						displayName: 'Width',
+						name: 'width',
+						type: 'number',
+						default: 0,
+						description: 'Desired image width in pixels (0 for original)',
+					},
+					{
+						displayName: 'Height',
+						name: 'height',
+						type: 'number',
+						default: 0,
+						description: 'Desired image height in pixels (0 for original)',
+					},
+					{
+						displayName: 'Quality',
+						name: 'quality',
+						type: 'number',
+						typeOptions: { minValue: 1, maxValue: 100 },
+						default: 80,
+						description: 'Image quality (1-100)',
 					},
 				],
 			},
@@ -350,6 +442,8 @@ export class PhotonIMessage implements INodeType {
 					{ name: 'List Chats', value: 'listChats', action: 'List chats', description: 'Retrieve a list of conversations' },
 					{ name: 'Create Chat', value: 'createChat', action: 'Create a chat', description: 'Start a new conversation' },
 					{ name: 'Mark Chat Read', value: 'markChatRead', action: 'Mark a chat as read', description: 'Mark all messages in a chat as read' },
+					{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator', description: 'Show the typing indicator in a chat' },
+					{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator', description: 'Hide the typing indicator in a chat' },
 				],
 				default: 'listChats',
 			},
@@ -430,6 +524,18 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['chat'], operation: ['markChatRead'] } },
 			},
 
+			// --- Start/Stop Typing fields ---
+			{
+				displayName: 'Chat GUID',
+				name: 'chatGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'iMessage;-;+1234567890',
+				description: 'The chat identifier to show typing in',
+				displayOptions: { show: { resource: ['chat'], operation: ['startTyping', 'stopTyping'] } },
+			},
+
 			// ====== SCHEDULED MESSAGE operations ======
 			{
 				displayName: 'Operation',
@@ -499,6 +605,109 @@ export class PhotonIMessage implements INodeType {
 				default: '',
 				description: 'The ID of the scheduled message to delete',
 				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['deleteScheduledMessage'] } },
+			},
+
+			// ====== POLL operations ======
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['poll'] } },
+				options: [
+					{ name: 'Create Poll', value: 'createPoll', action: 'Create a poll', description: 'Create an interactive poll in a chat' },
+					{ name: 'Vote', value: 'vote', action: 'Vote on a poll', description: 'Vote on a poll option' },
+					{ name: 'Unvote', value: 'unvote', action: 'Remove vote from a poll', description: 'Remove your vote from a poll option' },
+					{ name: 'Add Option', value: 'addOption', action: 'Add a poll option', description: 'Add a new option to an existing poll' },
+				],
+				default: 'createPoll',
+			},
+			// --- Create Poll fields ---
+			{
+				displayName: 'Chat GUID',
+				name: 'chatGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'iMessage;-;+1234567890',
+				description: 'The chat identifier to create the poll in',
+				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
+			},
+			{
+				displayName: 'Options',
+				name: 'pollOptions',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'Option A, Option B, Option C',
+				description: 'Comma-separated list of poll options',
+				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
+			},
+			{
+				displayName: 'Title',
+				name: 'pollTitle',
+				type: 'string',
+				default: '',
+				description: 'Optional title for the poll',
+				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
+			},
+			// --- Vote / Unvote fields ---
+			{
+				displayName: 'Chat GUID',
+				name: 'chatGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'iMessage;-;+1234567890',
+				description: 'The chat identifier containing the poll',
+				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
+			},
+			{
+				displayName: 'Poll Message GUID',
+				name: 'pollMessageGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'GUID of the poll message',
+				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
+			},
+			{
+				displayName: 'Option Identifier',
+				name: 'optionIdentifier',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'UUID of the poll option to vote on or unvote from',
+				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
+			},
+			// --- Add Option fields ---
+			{
+				displayName: 'Chat GUID',
+				name: 'chatGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'iMessage;-;+1234567890',
+				description: 'The chat identifier containing the poll',
+				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
+			},
+			{
+				displayName: 'Poll Message GUID',
+				name: 'pollMessageGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'GUID of the poll message to add the option to',
+				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
+			},
+			{
+				displayName: 'Option Text',
+				name: 'optionText',
+				type: 'string',
+				required: true,
+				default: '',
+				description: 'Text for the new poll option',
+				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
 			},
 
 			// ====== HANDLE operations ======
@@ -589,6 +798,57 @@ export class PhotonIMessage implements INodeType {
 							url: `${baseUrl}/api/v1/message/attachment`,
 							body,
 							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'unsendMessage') {
+						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
+						const partIndex = this.getNodeParameter('unsendPartIndex', i, 0) as number;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/${encodeURIComponent(messageGuid)}/unsend`,
+							body: { partIndex },
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'editMessage') {
+						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
+						const editedMessage = this.getNodeParameter('editedMessage', i) as string;
+						const partIndex = this.getNodeParameter('editPartIndex', i, 0) as number;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/${encodeURIComponent(messageGuid)}/edit`,
+							body: {
+								editedMessage,
+								backwardsCompatibilityMessage: editedMessage,
+								partIndex,
+							},
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'downloadAttachment') {
+						const attachmentGuid = this.getNodeParameter('attachmentGuid', i) as string;
+						const additionalFields = this.getNodeParameter('downloadAdditionalFields', i) as {
+							width?: number;
+							height?: number;
+							quality?: number;
+						};
+
+						const qs: IDataObject = {};
+						if (additionalFields.width) qs.width = additionalFields.width;
+						if (additionalFields.height) qs.height = additionalFields.height;
+						if (additionalFields.quality) qs.quality = additionalFields.quality;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'GET' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/attachment/${encodeURIComponent(attachmentGuid)}/download`,
+							qs,
+							json: true,
+							encoding: 'arraybuffer',
 						});
 						responseData = (response as { data?: unknown }).data ?? response;
 
@@ -769,6 +1029,26 @@ export class PhotonIMessage implements INodeType {
 							json: true,
 						});
 						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'startTyping') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+
+						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/typing`,
+							json: true,
+						});
+						responseData = { typing: true, chatGuid };
+
+					} else if (operation === 'stopTyping') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+
+						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'DELETE' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/typing`,
+							json: true,
+						});
+						responseData = { typing: false, chatGuid };
 					}
 
 				// ===== SCHEDULED MESSAGE =====
@@ -838,6 +1118,67 @@ export class PhotonIMessage implements INodeType {
 							json: true,
 						});
 						responseData = { deleted: true };
+					}
+
+				// ===== POLL =====
+				} else if (resource === 'poll') {
+					if (operation === 'createPoll') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+						const pollOptions = this.getNodeParameter('pollOptions', i) as string;
+						const pollTitle = this.getNodeParameter('pollTitle', i, '') as string;
+
+						const body: Record<string, unknown> = {
+							chatGuid,
+							options: pollOptions.split(',').map((s) => s.trim()).filter(Boolean),
+						};
+						if (pollTitle) body.title = pollTitle;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/poll/create`,
+							body,
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'vote') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
+						const optionIdentifier = this.getNodeParameter('optionIdentifier', i) as string;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/poll/vote`,
+							body: { chatGuid, pollMessageGuid, optionIdentifier },
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'unvote') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
+						const optionIdentifier = this.getNodeParameter('optionIdentifier', i) as string;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/poll/unvote`,
+							body: { chatGuid, pollMessageGuid, optionIdentifier },
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+
+					} else if (operation === 'addOption') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
+						const optionText = this.getNodeParameter('optionText', i) as string;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/poll/add-option`,
+							body: { chatGuid, pollMessageGuid, optionText },
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
 					}
 
 				// ===== HANDLE =====
