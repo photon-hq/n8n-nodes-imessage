@@ -25,21 +25,20 @@
 		"url": "https://github.com/photon-hq/n8n-nodes-imessage/issues"
 	},
 	"engines": {
-		"node": ">=18.0.0"
+		"node": ">=20.15.0"
 	},
 	"publishConfig": {
 		"registry": "https://registry.npmjs.org/",
 		"access": "public"
 	},
 	"scripts": {
-		"build": "tsc && npm run copy:icons",
-		"copy:icons": "cp nodes/PhotonIMessage/*.svg dist/nodes/PhotonIMessage/ 2>/dev/null || true",
-		"build:watch": "tsc --watch",
-		"type-check": "tsc --noEmit",
+		"build": "n8n-node build",
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"prepublishOnly": "npm run build"
+		"type-check": "tsc --noEmit",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
 	},
 	"files": [
 		"dist",
@@ -48,6 +47,7 @@
 	],
 	"n8n": {
 		"n8nNodesApiVersion": 1,
+		"strict": true,
 		"credentials": [
 			"dist/credentials/PhotonIMessageApi.credentials.js"
 		],
@@ -57,7 +57,10 @@
 		]
 	},
 	"devDependencies": {
+		"@n8n/node-cli": "*",
+		"eslint": "9.32.0",
 		"n8n-workflow": ">=1.0.0",
+		"prettier": "3.6.2",
 		"typescript": "~5.7.0"
 	},
 	"peerDependencies": {
