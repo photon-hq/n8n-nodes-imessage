@@ -9,7 +9,7 @@ This is an n8n community node for [Photon iMessage](https://github.com/photon-hq
 
 ## Prerequisites
 
-You need a **Photon** account. Photon hosts the iMessage server for you — no self-hosting required.
+Photon hosts the iMessage server for you — no self-hosting required.
 
 1. Visit [photon.codes](https://photon.codes) to create an account
 2. Get your **Server URL** and **API Key** from the Photon dashboard
@@ -95,6 +95,7 @@ Triggers your workflow when new iMessages are received.
 |-----------|-------------|
 | **Chat GUID** | Only trigger for messages in a specific chat (leave blank for all). |
 | **Include Sent Messages** | Also trigger for messages you sent (default: off). |
+| **Max Messages Per Poll** | Maximum number of messages to fetch per poll interval (default: 100). |
 
 The trigger polls for new messages and tracks the last message timestamp to avoid duplicates.
 
