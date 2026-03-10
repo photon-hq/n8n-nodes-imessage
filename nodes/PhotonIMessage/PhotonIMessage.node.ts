@@ -669,8 +669,14 @@ export class PhotonIMessage implements INodeType {
 							limit: additionalFields.limit ?? 20,
 							sort: additionalFields.sort ?? 'DESC',
 						};
-						if (additionalFields.after) body.after = new Date(additionalFields.after as string).getTime();
-						if (additionalFields.before) body.before = new Date(additionalFields.before as string).getTime();
+						if (additionalFields.after) {
+							const afterTime = new Date(additionalFields.after as string).getTime();
+							if (!Number.isNaN(afterTime)) body.after = afterTime;
+						}
+						if (additionalFields.before) {
+							const beforeTime = new Date(additionalFields.before as string).getTime();
+							if (!Number.isNaN(beforeTime)) body.before = beforeTime;
+						}
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
