@@ -1,0 +1,47 @@
+{
+	"name": "n8n-nodes-imessage",
+	"version": "0.1.0",
+	"description": "n8n community node for Photon iMessage — send, receive, and automate iMessage conversations via the Photon server",
+	"license": "MIT",
+	"homepage": "https://github.com/nicephoton/n8n-nodes-imessage",
+	"keywords": [
+		"n8n-community-node-package"
+	],
+	"author": {
+		"name": "Photon",
+		"url": "https://photon.codes"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/nicephoton/n8n-nodes-imessage.git"
+	},
+	"scripts": {
+		"build": "tsc && npm run copy:icons",
+		"copy:icons": "cp nodes/PhotonIMessage/*.svg dist/nodes/PhotonIMessage/ 2>/dev/null || true",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"prepublishOnly": "npm run build"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"credentials": [
+			"dist/credentials/PhotonIMessageApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/PhotonIMessage/PhotonIMessage.node.js",
+			"dist/nodes/PhotonIMessage/PhotonIMessageTrigger.node.js"
+		]
+	},
+	"devDependencies": {
+		"n8n-workflow": "*",
+		"typescript": "~5.7.0"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
+}
