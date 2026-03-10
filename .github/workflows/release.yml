@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  lint-and-build:
     name: Lint & Build
     runs-on: ubuntu-latest
     steps:
@@ -20,13 +20,45 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
-  release:
-    needs: test
-    uses: photon-hq/buildspace/.github/workflows/typescript-service-release.yaml@main
+  publish:
+    name: Publish to npm
+    needs: lint-and-build
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: read
-    with:
-      service-name: n8n-nodes-imessage
-      build-command: "npm run build"
-    secrets: inherit
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+
+      - name: Check if version already published
+        id: check
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          if npm view n8n-nodes-imessage@$PACKAGE_VERSION version 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish with provenance
+        if: steps.check.outputs.exists == 'false'
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.check.outputs.version }}
+          name: v${{ steps.check.outputs.version }}
+          generate_release_notes: true
