@@ -21,7 +21,7 @@ export class PhotonIMessage implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Photon iMessage',
 		name: 'photonIMessage',
-		icon: 'file:photon-imessage.png',
+		icon: 'file:photon-imessage.svg',
 		group: ['output'],
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
