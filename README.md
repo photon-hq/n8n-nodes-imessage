@@ -34,7 +34,10 @@ Perform operations on your iMessage account.
 |-----------|-------------|
 | **Send Message** | Send a text message to a chat. Supports reply-to, message effects (confetti, fireworks, etc.), and subject lines. |
 | **Send Attachment** | Send a file from the server Mac to a chat. Supports voice messages. |
+| **Unsend Message** | Retract a sent message. |
+| **Edit Message** | Edit the text of a sent message. |
 | **React to Message** | Send a tapback reaction (love, like, dislike, laugh, emphasize, question). |
+| **Download Attachment** | Download a received file or media attachment. |
 | **Search Messages** | Search messages by text content across all chats or a specific chat. |
 | **Get Messages** | Retrieve messages from a chat with date range and sort options. |
 
@@ -45,6 +48,17 @@ Perform operations on your iMessage account.
 | **List Chats** | List all conversations with optional last message preview. |
 | **Create Chat** | Start a new conversation with one or more participants. |
 | **Mark Chat Read** | Mark all messages in a chat as read. |
+| **Start Typing** | Show the typing indicator in a chat. |
+| **Stop Typing** | Hide the typing indicator in a chat. |
+
+#### Poll
+
+| Operation | Description |
+|-----------|-------------|
+| **Create Poll** | Create an interactive poll in a chat. |
+| **Vote** | Vote on a poll option. |
+| **Unvote** | Remove your vote from a poll option. |
+| **Add Option** | Add a new option to an existing poll. |
 
 #### Scheduled Message
 
