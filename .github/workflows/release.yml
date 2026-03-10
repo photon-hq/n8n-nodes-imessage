@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test before release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci --ignore-scripts
+      - run: npm run type-check
+      - run: npm run build
+
+  release:
+    needs: test
+    uses: photon-hq/buildspace/.github/workflows/typescript-service-release.yaml@main
+    permissions:
+      contents: write
+      pull-requests: read
+    with:
+      service-name: n8n-nodes-imessage
+      build-command: "npm run build"
+    secrets: inherit
