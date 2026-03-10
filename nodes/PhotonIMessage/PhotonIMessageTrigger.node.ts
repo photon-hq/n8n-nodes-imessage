@@ -44,6 +44,14 @@ export class PhotonIMessageTrigger implements INodeType {
 				default: false,
 				description: 'Whether to include messages you sent (isFromMe = true)',
 			},
+			{
+				displayName: 'Max Messages Per Poll',
+				name: 'limit',
+				type: 'number',
+				typeOptions: { minValue: 1 },
+				default: 100,
+				description: 'Maximum number of messages to fetch per poll interval',
+			},
 		],
 	};
 
@@ -60,10 +68,12 @@ export class PhotonIMessageTrigger implements INodeType {
 			return null;
 		}
 
+		const limit = this.getNodeParameter('limit') as number;
+
 		const body: Record<string, unknown> = {
 			after: staticData.lastChecked,
 			sort: 'ASC',
-			limit: 100,
+			limit,
 		};
 		if (chatGuid) {
 			body.chatGuid = chatGuid;
