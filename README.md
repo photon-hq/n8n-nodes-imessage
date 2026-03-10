@@ -9,10 +9,10 @@ This is an n8n community node for [Photon iMessage](https://github.com/photon-hq
 
 ## Prerequisites
 
-You need a running **Photon iMessage server** on a Mac. The server exposes a REST API that this node communicates with over HTTP.
+Photon hosts the iMessage server for you — no self-hosting required.
 
-- Install and run the [advanced-imessage-kit](https://github.com/photon-hq/advanced-imessage-kit) server on your Mac
-- Note your **Server URL** (e.g. `https://your-server.example.com`) and **API Key**
+1. Visit [photon.codes](https://photon.codes) to create an account
+2. Get your **Server URL** and **API Key** from the Photon dashboard
 
 ## Installation
 
@@ -25,9 +25,9 @@ npm install n8n-nodes-imessage
 ## Credentials
 
 1. In n8n, go to **Credentials** and create a new **Photon iMessage API** credential
-2. Enter your **Server URL** — the base URL of your Photon server (no trailing slash)
-3. Enter your **API Key** — the key is sent as an `X-API-Key` header on every request
-4. Click **Test** to verify the connection (calls `GET /api/v1/server/info`)
+2. Enter your **Server URL** — from your [Photon dashboard](https://photon.codes) (no trailing slash)
+3. Enter your **API Key** — from your [Photon dashboard](https://photon.codes), sent as an `X-API-Key` header on every request
+4. Click **Test** to verify the connection
 
 ## Nodes
 
@@ -95,6 +95,7 @@ Triggers your workflow when new iMessages are received.
 |-----------|-------------|
 | **Chat GUID** | Only trigger for messages in a specific chat (leave blank for all). |
 | **Include Sent Messages** | Also trigger for messages you sent (default: off). |
+| **Max Messages Per Poll** | Maximum number of messages to fetch per poll interval (default: 100). |
 
 The trigger polls for new messages and tracks the last message timestamp to avoid duplicates.
 
@@ -108,7 +109,8 @@ The Chat GUID identifies a conversation:
 
 ## Resources
 
-- [Photon advanced-imessage-kit](https://github.com/photon-hq/advanced-imessage-kit) — The iMessage server SDK
+- [Photon](https://photon.codes) — Get your API key and server URL
+- [Photon advanced-imessage-kit](https://github.com/photon-hq/advanced-imessage-kit) — The iMessage SDK
 - [n8n Community Nodes Documentation](https://docs.n8n.io/integrations/community-nodes/)
 
 ## License
