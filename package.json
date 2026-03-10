@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-imessage",
-	"version": "0.2.3",
+	"version": "0.2.4",
 	"description": "n8n community node for Photon iMessage — send, receive, and automate iMessage conversations via the Photon server",
 	"license": "MIT",
 	"keywords": [
@@ -27,24 +27,16 @@
 	"engines": {
 		"node": ">=20.15.0"
 	},
-	"publishConfig": {
-		"registry": "https://registry.npmjs.org/",
-		"access": "public"
-	},
 	"scripts": {
 		"build": "n8n-node build",
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"type-check": "tsc --noEmit",
 		"release": "n8n-node release",
 		"prepublishOnly": "n8n-node prerelease"
 	},
 	"files": [
-		"dist",
-		"npm-shrinkwrap.json",
-		"README.md",
-		"LICENSE"
+		"dist"
 	],
 	"n8n": {
 		"n8nNodesApiVersion": 1,
@@ -60,11 +52,10 @@
 	"devDependencies": {
 		"@n8n/node-cli": "*",
 		"eslint": "9.32.0",
-		"n8n-workflow": ">=1.0.0",
 		"prettier": "3.6.2",
-		"typescript": "~5.7.0"
+		"typescript": "5.9.2"
 	},
 	"peerDependencies": {
-		"n8n-workflow": ">=1.0.0"
+		"n8n-workflow": "*"
 	}
 }
