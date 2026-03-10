@@ -230,6 +230,14 @@ export class PhotonIMessage implements INodeType {
 				description: 'The tapback reaction to send',
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
 			},
+			{
+				displayName: 'Part Index',
+				name: 'partIndex',
+				type: 'number',
+				default: 0,
+				description: 'Index of the message part to react to (0 for the first part)',
+				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
+			},
 			// --- Search Messages fields ---
 			{
 				displayName: 'Query',
@@ -588,6 +596,7 @@ export class PhotonIMessage implements INodeType {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
 						const reaction = this.getNodeParameter('reaction', i) as string;
+						const partIndex = this.getNodeParameter('partIndex', i, 0) as number;
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
@@ -596,7 +605,7 @@ export class PhotonIMessage implements INodeType {
 								chatGuid,
 								selectedMessageGuid: messageGuid,
 								reaction,
-								partIndex: 0,
+								partIndex,
 							},
 							json: true,
 						});
