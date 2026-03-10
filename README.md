@@ -15,6 +15,10 @@ You need a running **Photon iMessage server** on a Mac. The server exposes a RES
 
 Follow the [n8n community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) to install `n8n-nodes-imessage` in your n8n instance.
 
+```
+npm install n8n-nodes-imessage
+```
+
 ## Credentials
 
 1. In n8n, go to **Credentials** and create a new **Photon iMessage API** credential
