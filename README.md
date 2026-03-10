@@ -1,5 +1,8 @@
 # n8n-nodes-imessage
 
+[![npm version](https://img.shields.io/npm/v/n8n-nodes-imessage.svg)](https://www.npmjs.com/package/n8n-nodes-imessage)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 This is an n8n community node for [Photon iMessage](https://github.com/photon-hq/advanced-imessage-kit). It lets you send, receive, search, and automate iMessage conversations directly from your n8n workflows.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/reference/license/) workflow automation platform.
