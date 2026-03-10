@@ -47,6 +47,7 @@ export class PhotonIMessage implements INodeType {
 				options: [
 					{ name: 'Message', value: 'message' },
 					{ name: 'Chat', value: 'chat' },
+					{ name: 'Contact', value: 'contact' },
 					{ name: 'Poll', value: 'poll' },
 					{ name: 'Scheduled Message', value: 'scheduledMessage' },
 					{ name: 'Handle', value: 'handle' },
@@ -710,6 +711,30 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
 			},
 
+			// ====== CONTACT operations ======
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['contact'] } },
+				options: [
+					{ name: 'Share Contact Card', value: 'shareContactCard', action: 'Share your contact card', description: 'Share your Name and Photo contact card in a chat' },
+				],
+				default: 'shareContactCard',
+			},
+			// --- Share Contact Card fields ---
+			{
+				displayName: 'Chat GUID',
+				name: 'chatGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'iMessage;-;+1234567890',
+				description: 'The chat to share your contact card in',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContactCard'] } },
+			},
+
 			// ====== HANDLE operations ======
 			{
 				displayName: 'Operation',
@@ -1176,6 +1201,20 @@ export class PhotonIMessage implements INodeType {
 							method: 'POST' as IHttpRequestMethods,
 							url: `${baseUrl}/api/v1/message/poll/add-option`,
 							body: { chatGuid, pollMessageGuid, optionText },
+							json: true,
+						});
+						responseData = (response as { data?: unknown }).data ?? response;
+					}
+
+				// ===== CONTACT =====
+				} else if (resource === 'contact') {
+					if (operation === 'shareContactCard') {
+						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+
+						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/contact/share`,
+							body: { chatGuid },
 							json: true,
 						});
 						responseData = (response as { data?: unknown }).data ?? response;
