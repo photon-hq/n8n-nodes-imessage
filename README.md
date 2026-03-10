@@ -51,6 +51,12 @@ Perform operations on your iMessage account.
 | **Start Typing** | Show the typing indicator in a chat. |
 | **Stop Typing** | Hide the typing indicator in a chat. |
 
+#### Contact
+
+| Operation | Description |
+|-----------|-------------|
+| **Share Contact Card** | Share your Name and Photo contact card in a chat. |
+
 #### Poll
 
 | Operation | Description |
