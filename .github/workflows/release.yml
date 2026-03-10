@@ -49,6 +49,29 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Generate production shrinkwrap for npm audit
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const sw = {
+              name: pkg.name,
+              version: pkg.version,
+              lockfileVersion: 3,
+              requires: true,
+              packages: {
+                '': {
+                  name: pkg.name,
+                  version: pkg.version,
+                  license: pkg.license,
+                  engines: pkg.engines,
+                  peerDependencies: pkg.peerDependencies
+                }
+              }
+            };
+            require('fs').writeFileSync('npm-shrinkwrap.json', JSON.stringify(sw, null, 2) + '\n');
+          "
+
       - name: Publish with provenance
         if: steps.check.outputs.exists == 'false'
         run: npm publish --provenance --access public
