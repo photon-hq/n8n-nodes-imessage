@@ -1,0 +1,49 @@
+import type {
+	IAuthenticateGeneric,
+	ICredentialTestRequest,
+	ICredentialType,
+	INodeProperties,
+} from 'n8n-workflow';
+
+export class PhotonIMessageApi implements ICredentialType {
+	name = 'photonIMessageApi';
+	displayName = 'Photon iMessage API';
+	documentationUrl = 'https://github.com/photon-hq/advanced-imessage-kit';
+	properties: INodeProperties[] = [
+		{
+			displayName: 'Server URL',
+			name: 'serverUrl',
+			type: 'string',
+			default: 'http://localhost:1234',
+			placeholder: 'https://your-server.example.com',
+			description: 'Base URL of your Photon iMessage server (no trailing slash)',
+			required: true,
+		},
+		{
+			displayName: 'API Key',
+			name: 'apiKey',
+			type: 'string',
+			typeOptions: { password: true },
+			default: '',
+			description: 'API key for authenticating with the Photon server',
+			required: true,
+		},
+	];
+
+	authenticate: IAuthenticateGeneric = {
+		type: 'generic',
+		properties: {
+			headers: {
+				'X-API-Key': '={{$credentials.apiKey}}',
+			},
+		},
+	};
+
+	test: ICredentialTestRequest = {
+		request: {
+			baseURL: '={{$credentials.serverUrl}}',
+			url: '/api/v1/server/info',
+			method: 'GET',
+		},
+	};
+}
