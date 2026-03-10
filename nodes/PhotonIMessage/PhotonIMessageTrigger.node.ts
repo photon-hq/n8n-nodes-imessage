@@ -49,10 +49,11 @@ export class PhotonIMessageTrigger implements INodeType {
 				name: 'limit',
 				type: 'number',
 				typeOptions: { minValue: 1 },
-				default: 100,
-				description: 'Maximum number of messages to fetch per poll interval',
+				default: 50,
+				description: 'Max number of results to return',
 			},
 		],
+		usableAsTool: true,
 	};
 
 	async poll(this: IPollFunctions): Promise<INodeExecutionData[][] | null> {
