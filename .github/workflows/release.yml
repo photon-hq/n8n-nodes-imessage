@@ -2,27 +2,12 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*.*.*'
 
 jobs:
-  lint-and-build:
-    name: Lint & Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - run: npm ci --ignore-scripts
-      - run: npm run lint
-      - run: npm run build
-
   publish:
     name: Publish to npm
-    needs: lint-and-build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -35,53 +20,13 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - run: npm ci --ignore-scripts
-      - run: npm run build
+      - run: npm ci
 
-      - name: Check if version already published
-        id: check
-        run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-          if npm view n8n-nodes-imessage@$PACKAGE_VERSION version 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate production shrinkwrap for npm audit
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          node -e "
-            const pkg = require('./package.json');
-            const sw = {
-              name: pkg.name,
-              version: pkg.version,
-              lockfileVersion: 3,
-              requires: true,
-              packages: {
-                '': {
-                  name: pkg.name,
-                  version: pkg.version,
-                  license: pkg.license,
-                  engines: pkg.engines,
-                  peerDependencies: pkg.peerDependencies
-                }
-              }
-            };
-            require('fs').writeFileSync('npm-shrinkwrap.json', JSON.stringify(sw, null, 2) + '\n');
-          "
-
-      - name: Publish with provenance
-        if: steps.check.outputs.exists == 'false'
-        run: npm publish --provenance --access public
+      - run: npm run release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.check.outputs.version }}
-          name: v${{ steps.check.outputs.version }}
           generate_release_notes: true

@@ -1,6 +1,3 @@
 node_modules/
 dist/
 *.tsbuildinfo
-npm-shrinkwrap.json
-favicon.png
-faviconV2.png
