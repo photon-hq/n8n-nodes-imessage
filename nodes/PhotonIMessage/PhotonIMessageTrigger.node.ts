@@ -11,7 +11,7 @@ export class PhotonIMessageTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Photon iMessage Trigger',
 		name: 'photonIMessageTrigger',
-		icon: 'file:photon-imessage.svg',
+		icon: 'file:photon-imessage.png',
 		group: ['trigger'],
 		version: 1,
 		subtitle: '=New iMessage received',
