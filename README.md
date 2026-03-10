@@ -69,7 +69,7 @@ Triggers your workflow when new iMessages are received.
 | **Chat GUID** | Only trigger for messages in a specific chat (leave blank for all). |
 | **Include Sent Messages** | Also trigger for messages you sent (default: off). |
 
-The trigger polls for new messages and automatically deduplicates using message GUIDs.
+The trigger polls for new messages and tracks the last message timestamp to avoid duplicates.
 
 ## Chat GUID Format
 
