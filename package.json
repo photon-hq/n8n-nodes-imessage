@@ -3,29 +3,47 @@
 	"version": "0.1.0",
 	"description": "n8n community node for Photon iMessage — send, receive, and automate iMessage conversations via the Photon server",
 	"license": "MIT",
-	"homepage": "https://github.com/photon-hq/n8n-nodes-imessage",
 	"keywords": [
-		"n8n-community-node-package"
+		"n8n-community-node-package",
+		"imessage",
+		"n8n",
+		"automation",
+		"messaging",
+		"macos"
 	],
 	"author": {
-		"name": "Photon",
+		"name": "Photon AI",
 		"url": "https://photon.codes"
 	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/photon-hq/n8n-nodes-imessage.git"
 	},
+	"homepage": "https://github.com/photon-hq/n8n-nodes-imessage#readme",
+	"bugs": {
+		"url": "https://github.com/photon-hq/n8n-nodes-imessage/issues"
+	},
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"publishConfig": {
+		"registry": "https://registry.npmjs.org/",
+		"access": "public"
+	},
 	"scripts": {
 		"build": "tsc && npm run copy:icons",
 		"copy:icons": "cp nodes/PhotonIMessage/*.svg dist/nodes/PhotonIMessage/ 2>/dev/null || true",
 		"build:watch": "tsc --watch",
+		"type-check": "tsc --noEmit",
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
 		"prepublishOnly": "npm run build"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"README.md",
+		"LICENSE"
 	],
 	"n8n": {
 		"n8nNodesApiVersion": 1,
