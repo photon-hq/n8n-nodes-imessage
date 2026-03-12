@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-imessage",
-	"version": "0.2.4",
+	"version": "0.2.5",
 	"description": "n8n community node for Photon iMessage — send, receive, and automate iMessage conversations via the Photon server",
 	"license": "MIT",
 	"keywords": [
@@ -36,7 +36,8 @@
 		"prepublishOnly": "n8n-node prerelease"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"npm-shrinkwrap.json"
 	],
 	"n8n": {
 		"n8nNodesApiVersion": 1,
