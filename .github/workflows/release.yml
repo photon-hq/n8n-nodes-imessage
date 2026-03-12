@@ -22,6 +22,16 @@ jobs:
 
       - run: npm ci
 
+      - name: Generate production shrinkwrap
+        run: |
+          node -e "
+            const p = require('./package.json');
+            const s = { name: p.name, version: p.version, lockfileVersion: 3, requires: true,
+              packages: { '': { name: p.name, version: p.version, license: p.license,
+                engines: p.engines, peerDependencies: p.peerDependencies } } };
+            require('fs').writeFileSync('npm-shrinkwrap.json', JSON.stringify(s, null, 2) + '\n');
+          "
+
       - run: npm run release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
