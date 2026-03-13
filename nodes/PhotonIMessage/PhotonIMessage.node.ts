@@ -24,7 +24,7 @@ export class PhotonIMessage implements INodeType {
 		icon: 'file:photon-imessage.svg',
 		group: ['output'],
 		version: 1,
-		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
+		subtitle: '={{{"sendMessage":"Send Message","sendAttachment":"Send Attachment","unsendMessage":"Unsend Message","editMessage":"Edit Message","reactToMessage":"React to Message","downloadAttachment":"Download Attachment","searchMessages":"Search Messages","getMessages":"Get Messages","listChats":"List Chats","createChat":"Create Chat","markChatRead":"Mark Chat Read","startTyping":"Start Typing","stopTyping":"Stop Typing","createScheduledMessage":"Schedule Message","listScheduledMessages":"List Scheduled","deleteScheduledMessage":"Delete Scheduled","createPoll":"Create Poll","vote":"Vote on Poll","unvote":"Unvote on Poll","addOption":"Add Poll Option","shareContactCard":"Share Contact Card","checkAvailability":"Check iMessage Availability"}[$parameter["operation"]] || $parameter["operation"]}}',
 		description: 'Send, search, and manage iMessage conversations via the Photon server',
 		defaults: {
 			name: 'Photon iMessage',
@@ -45,15 +45,15 @@ export class PhotonIMessage implements INodeType {
 				name: 'resource',
 				type: 'options',
 				noDataExpression: true,
-			options: [
-				{ name: 'Chat', value: 'chat' },
-				{ name: 'Contact', value: 'contact' },
-				{ name: 'Handle', value: 'handle' },
-				{ name: 'Message', value: 'message' },
-				{ name: 'Poll', value: 'poll' },
-				{ name: 'Scheduled Message', value: 'scheduledMessage' },
-			],
-			default: 'message',
+				options: [
+					{ name: 'Chat', value: 'chat', description: 'Create and manage conversations' },
+					{ name: 'Contact', value: 'contact', description: 'Share contact cards' },
+					{ name: 'Handle', value: 'handle', description: 'Check iMessage availability' },
+					{ name: 'Message', value: 'message', description: 'Send, search, and manage messages' },
+					{ name: 'Poll', value: 'poll', description: 'Create and manage polls in chats' },
+					{ name: 'Scheduled Message', value: 'scheduledMessage', description: 'Schedule messages for later delivery' },
+				],
+				default: 'message',
 			},
 
 			// ====== MESSAGE operations ======
@@ -63,17 +63,17 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['message'] } },
-			options: [
-				{ name: 'Download Attachment', value: 'downloadAttachment', action: 'Download an attachment', description: 'Download a received file or media attachment' },
-				{ name: 'Edit Message', value: 'editMessage', action: 'Edit a message', description: 'Edit the text of a sent message' },
-				{ name: 'Get Messages', value: 'getMessages', action: 'Get messages', description: 'Retrieve messages from a chat' },
-				{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback reaction to a message' },
-				{ name: 'Search Messages', value: 'searchMessages', action: 'Search messages', description: 'Search messages by text content' },
-				{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file attachment to a chat' },
-				{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message to a chat' },
-				{ name: 'Unsend Message', value: 'unsendMessage', action: 'Unsend a message', description: 'Retract a sent message' },
-			],
-			default: 'sendMessage',
+				options: [
+					{ name: 'Download Attachment', value: 'downloadAttachment', action: 'Download an attachment', description: 'Download a received file or media attachment' },
+					{ name: 'Edit Message', value: 'editMessage', action: 'Edit a message', description: 'Edit the text of a previously sent message' },
+					{ name: 'Get Messages', value: 'getMessages', action: 'Get messages', description: 'Retrieve messages from a chat' },
+					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback reaction (love, like, laugh, etc.)' },
+					{ name: 'Search Messages', value: 'searchMessages', action: 'Search messages', description: 'Search messages by text content across chats' },
+					{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file attachment to a chat' },
+					{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message to a chat' },
+					{ name: 'Unsend Message', value: 'unsendMessage', action: 'Unsend a message', description: 'Retract a sent message (recipients will see it was unsent)' },
+				],
+				default: 'sendMessage',
 			},
 			// --- Send Message fields ---
 			{
@@ -82,8 +82,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier (e.g. iMessage;-;+1234567890 or iMessage;+;chat123)',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
 				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
 			},
 			{
@@ -93,6 +94,7 @@ export class PhotonIMessage implements INodeType {
 				typeOptions: { rows: 4 },
 				required: true,
 				default: '',
+				placeholder: 'Hello! How are you?',
 				description: 'The text content of the message to send',
 				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
 			},
@@ -105,52 +107,53 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
 				options: [
 					{
-						displayName: 'Method',
-						name: 'method',
+						displayName: 'Effect',
+						name: 'effectId',
 						type: 'options',
 						options: [
-							{ name: 'AppleScript', value: 'apple-script' },
-							{ name: 'Private API', value: 'private-api' },
+							{ name: 'Balloons', value: 'com.apple.messages.effect.CKBalloonEffect', description: 'Screen: floating balloons' },
+							{ name: 'Confetti', value: 'com.apple.messages.effect.CKConfettiEffect', description: 'Screen: confetti celebration' },
+							{ name: 'Echo', value: 'com.apple.messages.effect.CKEchoEffect', description: 'Screen: message multiplies' },
+							{ name: 'Fireworks', value: 'com.apple.messages.effect.CKFireworksEffect', description: 'Screen: fireworks display' },
+							{ name: 'Gentle', value: 'com.apple.MobileSMS.expressivesend.gentle', description: 'Bubble: gentle send animation' },
+							{ name: 'Hearts', value: 'com.apple.messages.effect.CKHeartEffect', description: 'Screen: floating hearts' },
+							{ name: 'Invisible Ink', value: 'com.apple.MobileSMS.expressivesend.invisibleink', description: 'Bubble: hidden until swiped' },
+							{ name: 'Lasers', value: 'com.apple.messages.effect.CKHappyBirthdayEffect', description: 'Screen: laser light show' },
+							{ name: 'Loud', value: 'com.apple.MobileSMS.expressivesend.loud', description: 'Bubble: grows large with shake' },
+							{ name: 'None', value: '', description: 'No special effect' },
+							{ name: 'Shooting Star', value: 'com.apple.messages.effect.CKShootingStarEffect', description: 'Screen: shooting star streak' },
+							{ name: 'Slam', value: 'com.apple.MobileSMS.expressivesend.impact', description: 'Bubble: slams onto screen' },
+							{ name: 'Sparkles', value: 'com.apple.messages.effect.CKSparklesEffect', description: 'Screen: sparkle animation' },
+							{ name: 'Spotlight', value: 'com.apple.messages.effect.CKSpotlightEffect', description: 'Screen: spotlight on message' },
 						],
-						default: 'apple-script',
-						description: 'The method used to send the message',
+						default: '',
+						description: 'IMessage effect to send with the message. Bubble effects animate the message itself; Screen effects animate the full screen.',
+					},
+					{
+						displayName: 'Reply to Message GUID',
+						name: 'selectedMessageGuid',
+						type: 'string',
+						default: '',
+						placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
+						description: 'GUID of a message to reply to as an inline thread',
 					},
 					{
 						displayName: 'Subject',
 						name: 'subject',
 						type: 'string',
 						default: '',
-						description: 'Optional subject line for the message',
+						description: 'Optional subject line (shown as bold header in the message)',
 					},
 					{
-						displayName: 'Effect ID',
-						name: 'effectId',
+						displayName: 'Send Method',
+						name: 'method',
 						type: 'options',
 						options: [
-						{ name: 'Balloons', value: 'com.apple.messages.effect.CKBalloonEffect' },
-						{ name: 'Confetti', value: 'com.apple.messages.effect.CKConfettiEffect' },
-						{ name: 'Echo', value: 'com.apple.messages.effect.CKEchoEffect' },
-						{ name: 'Fireworks', value: 'com.apple.messages.effect.CKFireworksEffect' },
-						{ name: 'Gentle', value: 'com.apple.MobileSMS.expressivesend.gentle' },
-						{ name: 'Hearts', value: 'com.apple.messages.effect.CKHeartEffect' },
-						{ name: 'Invisible Ink', value: 'com.apple.MobileSMS.expressivesend.invisibleink' },
-						{ name: 'Lasers', value: 'com.apple.messages.effect.CKHappyBirthdayEffect' },
-						{ name: 'Loud', value: 'com.apple.MobileSMS.expressivesend.loud' },
-						{ name: 'None', value: '' },
-						{ name: 'Shooting Star', value: 'com.apple.messages.effect.CKShootingStarEffect' },
-						{ name: 'Slam', value: 'com.apple.MobileSMS.expressivesend.impact' },
-						{ name: 'Sparkles', value: 'com.apple.messages.effect.CKSparklesEffect' },
-						{ name: 'Spotlight', value: 'com.apple.messages.effect.CKSpotlightEffect' },
-					],
-						default: '',
-						description: 'IMessage screen effect to send with the message',
-					},
-					{
-						displayName: 'Reply To Message GUID',
-						name: 'selectedMessageGuid',
-						type: 'string',
-						default: '',
-						description: 'GUID of a message to reply to inline',
+							{ name: 'Private API (Recommended)', value: 'private-api' },
+							{ name: 'AppleScript (Fallback)', value: 'apple-script' },
+						],
+						default: 'private-api',
+						description: 'How to send the message. Private API supports all features; AppleScript is a fallback if Private API is unavailable.',
 					},
 				],
 			},
@@ -161,8 +164,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
 				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
 			},
 			{
@@ -172,7 +176,7 @@ export class PhotonIMessage implements INodeType {
 				required: true,
 				default: '',
 				placeholder: '/Users/you/Desktop/photo.jpg',
-				description: 'Absolute file path on the Photon server Mac',
+				description: 'Absolute file path on the Photon server Mac. The file must exist on the machine running the Photon server.',
 				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
 			},
 			{
@@ -188,102 +192,15 @@ export class PhotonIMessage implements INodeType {
 						name: 'fileName',
 						type: 'string',
 						default: '',
-						description: 'Override the file name sent with the attachment',
+						placeholder: 'photo.jpg',
+						description: 'Override the file name shown to the recipient',
 					},
 					{
-						displayName: 'Is Audio Message',
+						displayName: 'Send as Voice Message',
 						name: 'isAudioMessage',
 						type: 'boolean',
 						default: false,
-						description: 'Whether to send as a voice message',
-					},
-				],
-			},
-			// --- Unsend Message fields ---
-			{
-				displayName: 'Message GUID',
-				name: 'messageGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				description: 'GUID of the message to unsend',
-				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
-			},
-			{
-				displayName: 'Part Index',
-				name: 'unsendPartIndex',
-				type: 'number',
-				default: 0,
-				description: 'Index of the message part to unsend (0 for the first part)',
-				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
-			},
-			// --- Edit Message fields ---
-			{
-				displayName: 'Message GUID',
-				name: 'messageGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				description: 'GUID of the message to edit',
-				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
-			},
-			{
-				displayName: 'New Text',
-				name: 'editedMessage',
-				type: 'string',
-				typeOptions: { rows: 4 },
-				required: true,
-				default: '',
-				description: 'The replacement text for the message',
-				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
-			},
-			{
-				displayName: 'Part Index',
-				name: 'editPartIndex',
-				type: 'number',
-				default: 0,
-				description: 'Index of the message part to edit (0 for the first part)',
-				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
-			},
-			// --- Download Attachment fields ---
-			{
-				displayName: 'Attachment GUID',
-				name: 'attachmentGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				description: 'GUID of the attachment to download',
-				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'downloadAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
-				options: [
-					{
-						displayName: 'Width',
-						name: 'width',
-						type: 'number',
-						default: 0,
-						description: 'Desired image width in pixels (0 for original)',
-					},
-					{
-						displayName: 'Height',
-						name: 'height',
-						type: 'number',
-						default: 0,
-						description: 'Desired image height in pixels (0 for original)',
-					},
-					{
-						displayName: 'Quality',
-						name: 'quality',
-						type: 'number',
-						typeOptions: { minValue: 1, maxValue: 100 },
-						default: 80,
-						description: 'Image quality (1-100)',
+						description: 'Whether to send the audio file as an iMessage voice message (plays inline with waveform)',
 					},
 				],
 			},
@@ -294,8 +211,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
 			},
 			{
@@ -304,7 +222,8 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				description: 'GUID of the message to react to',
+				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
+				description: 'The GUID of the message to react to. Found in the output of "Get Messages" or the trigger node.',
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
 			},
 			{
@@ -313,24 +232,97 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				required: true,
 				options: [
-				{ name: 'Dislike', value: 'dislike' },
-				{ name: 'Emphasize', value: 'emphasize' },
-				{ name: 'Laugh', value: 'laugh' },
-				{ name: 'Like', value: 'like' },
-				{ name: 'Love', value: 'love' },
-				{ name: 'Question', value: 'question' },
-			],
+					{ name: 'Dislike', value: 'dislike', description: '👎 Thumbs down' },
+					{ name: 'Emphasize', value: 'emphasize', description: '‼️ Double exclamation' },
+					{ name: 'Laugh', value: 'laugh', description: '😂 Ha ha' },
+					{ name: 'Like', value: 'like', description: '👍 Thumbs up' },
+					{ name: 'Love', value: 'love', description: '❤️ Heart' },
+					{ name: 'Question', value: 'question', description: '❓ Question mark' },
+				],
 				default: 'love',
 				description: 'The tapback reaction to send',
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
 			},
 			{
-				displayName: 'Part Index',
-				name: 'partIndex',
-				type: 'number',
-				default: 0,
-				description: 'Index of the message part to react to (0 for the first part)',
+				displayName: 'Additional Fields',
+				name: 'reactAdditionalFields',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
+				options: [
+					{
+						displayName: 'Part Index',
+						name: 'partIndex',
+						type: 'number',
+						default: 0,
+						description: 'Which part of the message to react to (0 for the first part). Only needed for multi-part messages.',
+					},
+				],
+			},
+			// --- Get Messages fields ---
+			{
+				displayName: 'Chat GUID',
+				name: 'chatGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
+				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
+			},
+			{
+				displayName: 'Return All',
+				name: 'returnAll',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to return all results or only up to a given limit',
+				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
+			},
+			{
+				displayName: 'Limit',
+				name: 'limit',
+				type: 'number',
+				typeOptions: { minValue: 1 },
+				default: 50,
+				description: 'Max number of results to return',
+				displayOptions: { show: { resource: ['message'], operation: ['getMessages'], returnAll: [false] } },
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'getMessagesAdditionalFields',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
+				options: [
+					{
+						displayName: 'After',
+						name: 'after',
+						type: 'dateTime',
+						default: '',
+						description: 'Only return messages sent after this date/time',
+					},
+					{
+						displayName: 'Before',
+						name: 'before',
+						type: 'dateTime',
+						default: '',
+						description: 'Only return messages sent before this date/time',
+					},
+					{
+						displayName: 'Sort',
+						name: 'sort',
+						type: 'options',
+						options: [
+							{ name: 'Newest First', value: 'DESC' },
+							{ name: 'Oldest First', value: 'ASC' },
+						],
+						default: 'DESC',
+						description: 'Sort order of results',
+					},
+				],
 			},
 			// --- Search Messages fields ---
 			{
@@ -339,8 +331,26 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
+				placeholder: 'e.g. dinner tonight',
 				description: 'Text to search for in messages',
 				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'] } },
+			},
+			{
+				displayName: 'Return All',
+				name: 'returnAll',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to return all results or only up to a given limit',
+				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'] } },
+			},
+			{
+				displayName: 'Limit',
+				name: 'limit',
+				type: 'number',
+				typeOptions: { minValue: 1 },
+				default: 50,
+				description: 'Max number of results to return',
+				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'], returnAll: [false] } },
 			},
 			{
 				displayName: 'Additional Fields',
@@ -355,15 +365,8 @@ export class PhotonIMessage implements INodeType {
 						name: 'chatGuid',
 						type: 'string',
 						default: '',
-						description: 'Limit search to a specific chat',
-					},
-					{
-						displayName: 'Limit',
-						name: 'limit',
-						type: 'number',
-						typeOptions: { minValue: 1 },
-						default: 50,
-						description: 'Max number of results to return',
+						placeholder: 'e.g. iMessage;-;+1234567890',
+						description: 'Limit search to a specific chat (leave empty to search all chats)',
 					},
 					{
 						displayName: 'Sort',
@@ -378,57 +381,112 @@ export class PhotonIMessage implements INodeType {
 					},
 				],
 			},
-			// --- Get Messages fields ---
+			// --- Download Attachment fields ---
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'Attachment GUID',
+				name: 'attachmentGuid',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier to retrieve messages from',
-				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
+				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
+				description: 'The GUID of the attachment to download. Found in message data from "Get Messages" or the trigger node.',
+				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
 			},
 			{
 				displayName: 'Additional Fields',
-				name: 'getMessagesAdditionalFields',
+				name: 'downloadAdditionalFields',
 				type: 'collection',
 				placeholder: 'Add Field',
 				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
+				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
 				options: [
 					{
-						displayName: 'Limit',
-						name: 'limit',
+						displayName: 'Height',
+						name: 'height',
 						type: 'number',
-						typeOptions: { minValue: 1 },
-						default: 50,
-						description: 'Max number of results to return',
+						default: 0,
+						description: 'Resize image to this height in pixels (0 = original size)',
 					},
 					{
-						displayName: 'After',
-						name: 'after',
-						type: 'dateTime',
-						default: '',
-						description: 'Only return messages after this date',
+						displayName: 'Quality',
+						name: 'quality',
+						type: 'number',
+						typeOptions: { minValue: 1, maxValue: 100 },
+						default: 80,
+						description: 'JPEG quality (1-100). Only applies to image attachments.',
 					},
 					{
-						displayName: 'Before',
-						name: 'before',
-						type: 'dateTime',
-						default: '',
-						description: 'Only return messages before this date',
+						displayName: 'Width',
+						name: 'width',
+						type: 'number',
+						default: 0,
+						description: 'Resize image to this width in pixels (0 = original size)',
 					},
+				],
+			},
+			// --- Edit Message fields ---
+			{
+				displayName: 'Message GUID',
+				name: 'messageGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
+				description: 'The GUID of the message to edit. You can only edit messages you sent.',
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+			},
+			{
+				displayName: 'New Text',
+				name: 'editedMessage',
+				type: 'string',
+				typeOptions: { rows: 4 },
+				required: true,
+				default: '',
+				description: 'The replacement text for the message',
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'editAdditionalFields',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+				options: [
 					{
-						displayName: 'Sort',
-						name: 'sort',
-						type: 'options',
-						options: [
-							{ name: 'Newest First', value: 'DESC' },
-							{ name: 'Oldest First', value: 'ASC' },
-						],
-						default: 'DESC',
-						description: 'Sort order of results',
+						displayName: 'Part Index',
+						name: 'editPartIndex',
+						type: 'number',
+						default: 0,
+						description: 'Which part of the message to edit (0 for the first part). Only needed for multi-part messages.',
+					},
+				],
+			},
+			// --- Unsend Message fields ---
+			{
+				displayName: 'Message GUID',
+				name: 'messageGuid',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
+				description: 'The GUID of the message to unsend. You can only unsend messages you sent. Recipients will see "X unsent a message".',
+				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'unsendAdditionalFields',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
+				options: [
+					{
+						displayName: 'Part Index',
+						name: 'unsendPartIndex',
+						type: 'number',
+						default: 0,
+						description: 'Which part of the message to unsend (0 for the first part). Only needed for multi-part messages.',
 					},
 				],
 			},
@@ -440,16 +498,33 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['chat'] } },
-			options: [
-				{ name: 'Create Chat', value: 'createChat', action: 'Create a chat', description: 'Start a new conversation' },
-				{ name: 'List Chats', value: 'listChats', action: 'List chats', description: 'Retrieve a list of conversations' },
-				{ name: 'Mark Chat Read', value: 'markChatRead', action: 'Mark a chat as read', description: 'Mark all messages in a chat as read' },
-				{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator', description: 'Show the typing indicator in a chat' },
-				{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator', description: 'Hide the typing indicator in a chat' },
-			],
-			default: 'listChats',
+				options: [
+					{ name: 'Create Chat', value: 'createChat', action: 'Create a chat', description: 'Start a new conversation with one or more participants' },
+					{ name: 'List Chats', value: 'listChats', action: 'List chats', description: 'Retrieve recent conversations with participants and last message' },
+					{ name: 'Mark Chat Read', value: 'markChatRead', action: 'Mark a chat as read', description: 'Mark all messages in a chat as read' },
+					{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator', description: 'Show the typing bubble (…) in a chat' },
+					{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator', description: 'Hide the typing bubble' },
+				],
+				default: 'listChats',
 			},
 			// --- List Chats fields ---
+			{
+				displayName: 'Return All',
+				name: 'returnAll',
+				type: 'boolean',
+				default: false,
+				description: 'Whether to return all results or only up to a given limit',
+				displayOptions: { show: { resource: ['chat'], operation: ['listChats'] } },
+			},
+			{
+				displayName: 'Limit',
+				name: 'limit',
+				type: 'number',
+				typeOptions: { minValue: 1 },
+				default: 50,
+				description: 'Max number of results to return',
+				displayOptions: { show: { resource: ['chat'], operation: ['listChats'], returnAll: [false] } },
+			},
 			{
 				displayName: 'Additional Fields',
 				name: 'listChatsAdditionalFields',
@@ -459,31 +534,23 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['chat'], operation: ['listChats'] } },
 				options: [
 					{
-						displayName: 'Limit',
-						name: 'limit',
-						type: 'number',
-						typeOptions: { minValue: 1 },
-						default: 50,
-						description: 'Max number of results to return',
-					},
-					{
 						displayName: 'Include Last Message',
 						name: 'withLastMessage',
 						type: 'boolean',
 						default: true,
-						description: 'Whether to include the last message in each chat',
+						description: 'Whether to include the last message preview for each chat',
 					},
 				],
 			},
 			// --- Create Chat fields ---
 			{
-				displayName: 'Phone Numbers',
+				displayName: 'Participants',
 				name: 'phoneNumbers',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: '+1234567890,+0987654321',
-				description: 'Comma-separated phone numbers or email addresses for the chat participants',
+				placeholder: '+1234567890, +0987654321',
+				description: 'Comma-separated phone numbers or email addresses. Use one participant for a DM or multiple for a group chat.',
 				displayOptions: { show: { resource: ['chat'], operation: ['createChat'] } },
 			},
 			{
@@ -498,8 +565,10 @@ export class PhotonIMessage implements INodeType {
 						displayName: 'Initial Message',
 						name: 'message',
 						type: 'string',
+						typeOptions: { rows: 3 },
 						default: '',
-						description: 'An optional first message to send when creating the chat',
+						placeholder: 'Hey! Added you to the group.',
+						description: 'Send a message immediately when creating the chat',
 					},
 					{
 						displayName: 'Service',
@@ -510,7 +579,7 @@ export class PhotonIMessage implements INodeType {
 							{ name: 'SMS', value: 'SMS' },
 						],
 						default: 'iMessage',
-						description: 'The messaging service to use',
+						description: 'The messaging service to use. SMS is only available for phone numbers.',
 					},
 				],
 			},
@@ -521,8 +590,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier to mark as read',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
 				displayOptions: { show: { resource: ['chat'], operation: ['markChatRead'] } },
 			},
 
@@ -533,8 +603,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier to show typing in',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
 				displayOptions: { show: { resource: ['chat'], operation: ['startTyping', 'stopTyping'] } },
 			},
 
@@ -546,9 +617,9 @@ export class PhotonIMessage implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['scheduledMessage'] } },
 				options: [
-					{ name: 'Create Scheduled Message', value: 'createScheduledMessage', action: 'Create a scheduled message', description: 'Schedule a message to be sent later' },
-					{ name: 'List Scheduled Messages', value: 'listScheduledMessages', action: 'List scheduled messages', description: 'Get all scheduled messages' },
-					{ name: 'Delete Scheduled Message', value: 'deleteScheduledMessage', action: 'Delete a scheduled message', description: 'Remove a scheduled message' },
+					{ name: 'Create Scheduled Message', value: 'createScheduledMessage', action: 'Create a scheduled message', description: 'Schedule a message to be sent at a future date/time' },
+					{ name: 'List Scheduled Messages', value: 'listScheduledMessages', action: 'List scheduled messages', description: 'Get all pending scheduled messages' },
+					{ name: 'Delete Scheduled Message', value: 'deleteScheduledMessage', action: 'Delete a scheduled message', description: 'Cancel and remove a scheduled message before it sends' },
 				],
 				default: 'createScheduledMessage',
 			},
@@ -559,8 +630,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
 				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
 			},
 			{
@@ -570,6 +642,7 @@ export class PhotonIMessage implements INodeType {
 				typeOptions: { rows: 4 },
 				required: true,
 				default: '',
+				placeholder: 'Happy birthday! 🎂',
 				description: 'The text content of the scheduled message',
 				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
 			},
@@ -579,23 +652,23 @@ export class PhotonIMessage implements INodeType {
 				type: 'dateTime',
 				required: true,
 				default: '',
-				description: 'When to send the message',
+				description: 'The date and time when the message should be sent',
 				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
 			},
 			{
-				displayName: 'Schedule Type',
+				displayName: 'Repeat',
 				name: 'scheduleType',
 				type: 'options',
-			options: [
-				{ name: 'Daily', value: 'daily' },
-				{ name: 'Hourly', value: 'hourly' },
-				{ name: 'Monthly', value: 'monthly' },
-				{ name: 'Once', value: 'once' },
-				{ name: 'Weekly', value: 'weekly' },
-				{ name: 'Yearly', value: 'yearly' },
-			],
-			default: 'once',
-			description: 'How often to send the message',
+				options: [
+					{ name: 'Daily', value: 'daily', description: 'Repeat every day at the same time' },
+					{ name: 'Hourly', value: 'hourly', description: 'Repeat every hour' },
+					{ name: 'Monthly', value: 'monthly', description: 'Repeat every month on the same date' },
+					{ name: 'Once (No Repeat)', value: 'once', description: 'Send only once at the scheduled time' },
+					{ name: 'Weekly', value: 'weekly', description: 'Repeat every week on the same day' },
+					{ name: 'Yearly', value: 'yearly', description: 'Repeat every year on the same date' },
+				],
+				default: 'once',
+				description: 'How often to repeat sending this message',
 				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
 			},
 			// --- Delete Scheduled Message fields ---
@@ -605,7 +678,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				description: 'The ID of the scheduled message to delete',
+				description: 'The ID of the scheduled message to delete. Use "List Scheduled Messages" to find this value.',
 				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['deleteScheduledMessage'] } },
 			},
 
@@ -617,8 +690,8 @@ export class PhotonIMessage implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['poll'] } },
 				options: [
-					{ name: 'Create Poll', value: 'createPoll', action: 'Create a poll', description: 'Create an interactive poll in a chat' },
-					{ name: 'Vote', value: 'vote', action: 'Vote on a poll', description: 'Vote on a poll option' },
+					{ name: 'Create Poll', value: 'createPoll', action: 'Create a poll', description: 'Create an interactive poll in a group chat' },
+					{ name: 'Vote', value: 'vote', action: 'Vote on a poll', description: 'Cast a vote on a poll option' },
 					{ name: 'Unvote', value: 'unvote', action: 'Remove vote from a poll', description: 'Remove your vote from a poll option' },
 					{ name: 'Add Option', value: 'addOption', action: 'Add a poll option', description: 'Add a new option to an existing poll' },
 				],
@@ -631,27 +704,45 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier to create the poll in',
+				placeholder: 'e.g. iMessage;+;chat123456',
+				hint: 'Polls are typically used in group chats: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
+				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
+			},
+			{
+				displayName: 'Poll Question / Title',
+				name: 'pollTitle',
+				type: 'string',
+				default: '',
+				placeholder: 'Where should we eat tonight?',
+				description: 'The question or title displayed at the top of the poll',
 				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
 			},
 			{
 				displayName: 'Options',
 				name: 'pollOptions',
-				type: 'string',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true, sortable: true },
 				required: true,
-				default: '',
-				placeholder: 'Option A, Option B, Option C',
-				description: 'Comma-separated list of poll options',
+				default: { optionValues: [{ option: '' }, { option: '' }] },
+				placeholder: 'Add Option',
+				description: 'The choices voters can pick from (minimum 2)',
 				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
-			},
-			{
-				displayName: 'Title',
-				name: 'pollTitle',
-				type: 'string',
-				default: '',
-				description: 'Optional title for the poll',
-				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
+				options: [
+					{
+						displayName: 'Option',
+						name: 'optionValues',
+						values: [
+							{
+								displayName: 'Option Text',
+								name: 'option',
+								type: 'string',
+								default: '',
+								placeholder: 'e.g. Pizza',
+							},
+						],
+					},
+				],
 			},
 			// --- Vote / Unvote fields ---
 			{
@@ -660,8 +751,8 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier containing the poll',
+				placeholder: 'e.g. iMessage;+;chat123456',
+				description: 'The unique chat identifier containing the poll',
 				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
 			},
 			{
@@ -670,7 +761,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				description: 'GUID of the poll message',
+				description: 'The GUID of the poll message. Found in the output of "Create Poll" or "Get Messages".',
 				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
 			},
 			{
@@ -679,7 +770,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				description: 'UUID of the poll option to vote on or unvote from',
+				description: 'The UUID of the poll option to vote on. Found in the poll message data.',
 				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
 			},
 			// --- Add Option fields ---
@@ -689,8 +780,8 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat identifier containing the poll',
+				placeholder: 'e.g. iMessage;+;chat123456',
+				description: 'The unique chat identifier containing the poll',
 				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
 			},
 			{
@@ -699,7 +790,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				description: 'GUID of the poll message to add the option to',
+				description: 'The GUID of the poll message. Found in the output of "Create Poll" or "Get Messages".',
 				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
 			},
 			{
@@ -708,7 +799,8 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				description: 'Text for the new poll option',
+				placeholder: 'e.g. Sushi',
+				description: 'Text for the new poll option to add',
 				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
 			},
 
@@ -731,8 +823,9 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'The chat to share your contact card in',
+				placeholder: 'e.g. iMessage;-;+1234567890',
+				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
+				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
 				displayOptions: { show: { resource: ['contact'], operation: ['shareContactCard'] } },
 			},
 
@@ -744,7 +837,7 @@ export class PhotonIMessage implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['handle'] } },
 				options: [
-					{ name: 'Check iMessage Availability', value: 'checkAvailability', action: 'Check i message availability', description: 'Check if a phone number or email supports iMessage' },
+					{ name: 'Check iMessage Availability', value: 'checkAvailability', action: 'Check i message availability', description: 'Check if a phone number or email can receive iMessages' },
 				],
 				default: 'checkAvailability',
 			},
@@ -755,8 +848,8 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: '+1234567890',
-				description: 'The phone number or email address to check',
+				placeholder: '+1234567890 or user@example.com',
+				description: 'The phone number (with country code) or email address to check for iMessage support',
 				displayOptions: { show: { resource: ['handle'], operation: ['checkAvailability'] } },
 			},
 		],
@@ -769,6 +862,16 @@ export class PhotonIMessage implements INodeType {
 		const operation = this.getNodeParameter('operation', 0) as string;
 		const credentials = await this.getCredentials('photonIMessageApi');
 		const baseUrl = (credentials.serverUrl as string).replace(/\/+$/, '');
+
+		const normalizeChatGuid = (guid: string): string[] => {
+			const parts = guid.split(';');
+			if (parts.length === 3) {
+				const addr = parts[2];
+				const sep = parts[1];
+				return [`iMessage;${sep};${addr}`, `any;${sep};${addr}`];
+			}
+			return [guid];
+		};
 
 		for (let i = 0; i < items.length; i++) {
 			try {
@@ -790,7 +893,7 @@ export class PhotonIMessage implements INodeType {
 							chatGuid,
 							message,
 							tempGuid: generateTempGuid(),
-							method: additionalFields.method || 'apple-script',
+							method: additionalFields.method || 'private-api',
 						};
 						if (additionalFields.subject) body.subject = additionalFields.subject;
 						if (additionalFields.effectId) body.effectId = additionalFields.effectId;
@@ -829,7 +932,10 @@ export class PhotonIMessage implements INodeType {
 
 					} else if (operation === 'unsendMessage') {
 						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
-						const partIndex = this.getNodeParameter('unsendPartIndex', i, 0) as number;
+						const unsendFields = this.getNodeParameter('unsendAdditionalFields', i, {}) as {
+							unsendPartIndex?: number;
+						};
+						const partIndex = unsendFields.unsendPartIndex ?? 0;
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
@@ -842,7 +948,10 @@ export class PhotonIMessage implements INodeType {
 					} else if (operation === 'editMessage') {
 						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
 						const editedMessage = this.getNodeParameter('editedMessage', i) as string;
-						const partIndex = this.getNodeParameter('editPartIndex', i, 0) as number;
+						const editFields = this.getNodeParameter('editAdditionalFields', i, {}) as {
+							editPartIndex?: number;
+						};
+						const partIndex = editFields.editPartIndex ?? 0;
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
@@ -882,7 +991,10 @@ export class PhotonIMessage implements INodeType {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
 						const reaction = this.getNodeParameter('reaction', i) as string;
-						const partIndex = this.getNodeParameter('partIndex', i, 0) as number;
+						const reactFields = this.getNodeParameter('reactAdditionalFields', i, {}) as {
+							partIndex?: number;
+						};
+						const partIndex = reactFields.partIndex ?? 0;
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
@@ -899,23 +1011,32 @@ export class PhotonIMessage implements INodeType {
 
 					} else if (operation === 'searchMessages') {
 						const query = this.getNodeParameter('query', i) as string;
+						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
+						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
 						const additionalFields = this.getNodeParameter('searchAdditionalFields', i) as {
 							chatGuid?: string;
-							limit?: number;
 							sort?: string;
 						};
 
+						const where: Array<{ statement: string; args: Record<string, unknown> }> = [
+							{
+								statement: 'message.text LIKE :text',
+								args: { text: `%${query}%` },
+							},
+						];
+						if (additionalFields.chatGuid) {
+							const guids = normalizeChatGuid(additionalFields.chatGuid);
+							const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
+							const guidArgs: Record<string, string> = {};
+							guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
+							where.push({ statement: `chat.guid IN (${guidPlaceholders})`, args: guidArgs });
+						}
+
 						const body: Record<string, unknown> = {
-							where: [
-								{
-									statement: 'message.text LIKE :text',
-									args: { text: `%${query}%` },
-								},
-							],
-							limit: additionalFields.limit ?? 50,
+							where,
+							limit,
 							sort: additionalFields.sort ?? 'DESC',
 						};
-						if (additionalFields.chatGuid) body.chatGuid = additionalFields.chatGuid;
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
@@ -928,13 +1049,7 @@ export class PhotonIMessage implements INodeType {
 						if (Array.isArray(messages)) {
 							for (const msg of messages) {
 								returnData.push({
-									json: {
-										guid: msg.guid,
-										text: msg.text,
-										sender: (msg.handle as Record<string, unknown>)?.address ?? null,
-										dateCreated: msg.dateCreated,
-										isFromMe: msg.isFromMe,
-									},
+									json: msg as IDataObject,
 								});
 							}
 							continue;
@@ -943,26 +1058,44 @@ export class PhotonIMessage implements INodeType {
 
 					} else if (operation === 'getMessages') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
+						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
 						const additionalFields = this.getNodeParameter('getMessagesAdditionalFields', i) as {
-							limit?: number;
 							after?: string;
 							before?: string;
 							sort?: string;
 						};
 
-						const body: Record<string, unknown> = {
-							chatGuid,
-							limit: additionalFields.limit ?? 50,
-							sort: additionalFields.sort ?? 'DESC',
-						};
+						const guids = normalizeChatGuid(chatGuid);
+						const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
+						const guidArgs: Record<string, string> = {};
+						guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
+
+						const where: Array<{ statement: string; args: Record<string, unknown> }> = [
+							{
+								statement: `chat.guid IN (${guidPlaceholders})`,
+								args: guidArgs,
+							},
+						];
 						if (additionalFields.after) {
 							const afterTime = new Date(additionalFields.after as string).getTime();
-							if (!Number.isNaN(afterTime)) body.after = afterTime;
+							if (!Number.isNaN(afterTime)) {
+								where.push({ statement: 'message.date > :after', args: { after: afterTime } });
+							}
 						}
 						if (additionalFields.before) {
 							const beforeTime = new Date(additionalFields.before as string).getTime();
-							if (!Number.isNaN(beforeTime)) body.before = beforeTime;
+							if (!Number.isNaN(beforeTime)) {
+								where.push({ statement: 'message.date < :before', args: { before: beforeTime } });
+							}
 						}
+
+						const body: Record<string, unknown> = {
+							where,
+							limit,
+							sort: additionalFields.sort ?? 'DESC',
+							with: ['chat', 'handle', 'attachment'],
+						};
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
@@ -975,13 +1108,7 @@ export class PhotonIMessage implements INodeType {
 						if (Array.isArray(messages)) {
 							for (const msg of messages) {
 								returnData.push({
-									json: {
-										guid: msg.guid,
-										text: msg.text,
-										sender: (msg.handle as Record<string, unknown>)?.address ?? null,
-										dateCreated: msg.dateCreated,
-										isFromMe: msg.isFromMe,
-									},
+									json: msg as IDataObject,
 								});
 							}
 							continue;
@@ -992,17 +1119,23 @@ export class PhotonIMessage implements INodeType {
 				// ===== CHAT =====
 				} else if (resource === 'chat') {
 					if (operation === 'listChats') {
+						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
+						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
 						const additionalFields = this.getNodeParameter('listChatsAdditionalFields', i) as {
-							limit?: number;
 							withLastMessage?: boolean;
 						};
+
+						const withRelations = ['participants'];
+						if (additionalFields.withLastMessage !== false) {
+							withRelations.push('lastMessage');
+						}
 
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 							method: 'POST' as IHttpRequestMethods,
 							url: `${baseUrl}/api/v1/chat/query`,
 							body: {
-								limit: additionalFields.limit ?? 50,
-								withLastMessage: additionalFields.withLastMessage !== false,
+								limit,
+								with: withRelations,
 							},
 							json: true,
 						});
@@ -1010,13 +1143,17 @@ export class PhotonIMessage implements INodeType {
 						const chats = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(chats)) {
 							for (const chat of chats) {
-								const lastMessage = chat.lastMessage as Record<string, unknown> | undefined;
+								const participants = chat.participants as Array<Record<string, unknown>> | undefined;
+								const isGroup = (chat.style as number) === 43;
+								const participantAddresses = participants?.map((p) => p.address as string) ?? [];
+
 								returnData.push({
 									json: {
-										guid: chat.guid,
-										displayName: chat.displayName,
-										lastMessageText: lastMessage?.text ?? null,
-										lastMessageDate: lastMessage?.dateCreated ?? null,
+										...chat as IDataObject,
+										displayName: (chat.displayName as string) || (isGroup ? 'Group Chat' : participantAddresses[0] ?? ''),
+										isGroup,
+										participantAddresses,
+										participantCount: participantAddresses.length,
 									},
 								});
 							}
@@ -1100,7 +1237,7 @@ export class PhotonIMessage implements INodeType {
 								payload: {
 									chatGuid,
 									message,
-									method: 'apple-script',
+									method: 'private-api',
 								},
 								scheduledFor: new Date(sendAt).getTime(),
 								schedule,
@@ -1119,16 +1256,8 @@ export class PhotonIMessage implements INodeType {
 						const schedules = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(schedules)) {
 							for (const sched of schedules) {
-								const payload = sched.payload as Record<string, unknown> | undefined;
-								const scheduleInfo = sched.schedule as Record<string, unknown> | undefined;
 								returnData.push({
-									json: {
-										id: sched.id,
-										message: payload?.message ?? null,
-										chatGuid: payload?.chatGuid ?? null,
-										scheduledFor: sched.scheduledFor,
-										scheduleType: scheduleInfo?.type ?? null,
-									},
+									json: sched as IDataObject,
 								});
 							}
 							continue;
@@ -1150,12 +1279,17 @@ export class PhotonIMessage implements INodeType {
 				} else if (resource === 'poll') {
 					if (operation === 'createPoll') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const pollOptions = this.getNodeParameter('pollOptions', i) as string;
 						const pollTitle = this.getNodeParameter('pollTitle', i, '') as string;
+						const pollOptionsData = this.getNodeParameter('pollOptions', i) as {
+							optionValues?: Array<{ option: string }>;
+						};
+						const options = (pollOptionsData.optionValues ?? [])
+							.map((o) => o.option.trim())
+							.filter(Boolean);
 
 						const body: Record<string, unknown> = {
 							chatGuid,
-							options: pollOptions.split(',').map((s) => s.trim()).filter(Boolean),
+							options,
 						};
 						if (pollTitle) body.title = pollTitle;
 

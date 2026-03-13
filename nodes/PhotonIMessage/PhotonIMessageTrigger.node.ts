@@ -1,11 +1,39 @@
 import type {
-	IPollFunctions,
+	IWebhookFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
-	IHttpRequestMethods,
+	IWebhookResponseData,
+	IHookFunctions,
 } from 'n8n-workflow';
 import { NodeConnectionTypes } from 'n8n-workflow';
+import { createHmac } from 'crypto';
+
+const PHOTON_EVENTS = [
+	{ name: 'All Events', value: '*', description: 'Trigger on every event type' },
+	{ name: 'New Message', value: 'new-message', description: 'Messages: A new message was received or sent' },
+	{ name: 'Updated Message', value: 'updated-message', description: 'Messages: A message was edited or a reaction was added' },
+	{ name: 'Message Send Error', value: 'message-send-error', description: 'Messages: A message failed to send' },
+	{ name: 'Chat Read Status Changed', value: 'chat-read-status-changed', description: 'Chat: A chat was marked as read or unread' },
+	{ name: 'Typing Indicator', value: 'typing-indicator', description: 'Chat: Someone started or stopped typing' },
+	{ name: 'Group Name Change', value: 'group-name-change', description: 'Group: A group chat was renamed' },
+	{ name: 'Participant Added', value: 'participant-added', description: 'Group: Someone was added to a group chat' },
+	{ name: 'Participant Removed', value: 'participant-removed', description: 'Group: Someone was removed from a group chat' },
+	{ name: 'Participant Left', value: 'participant-left', description: 'Group: Someone left a group chat' },
+	{ name: 'Group Icon Changed', value: 'group-icon-changed', description: 'Group: The group chat icon was updated' },
+	{ name: 'Group Icon Removed', value: 'group-icon-removed', description: 'Group: The group chat icon was removed' },
+	{ name: 'FaceTime Call Status Changed', value: 'ft-call-status-changed', description: 'Apple: A FaceTime call started, ended, or changed status' },
+	{ name: 'New FindMy Location', value: 'new-findmy-location', description: 'Apple: A new Find My location update was received' },
+	{ name: 'Scheduled Message Created', value: 'scheduled-message-created', description: 'Scheduled: A new message was scheduled' },
+	{ name: 'Scheduled Message Updated', value: 'scheduled-message-updated', description: 'Scheduled: A scheduled message was modified' },
+	{ name: 'Scheduled Message Deleted', value: 'scheduled-message-deleted', description: 'Scheduled: A scheduled message was cancelled' },
+	{ name: 'Scheduled Message Sent', value: 'scheduled-message-sent', description: 'Scheduled: A scheduled message was delivered' },
+	{ name: 'Scheduled Message Error', value: 'scheduled-message-error', description: 'Scheduled: A scheduled message failed to send' },
+	{ name: 'New Server', value: 'new-server', description: 'Server: A new Photon server came online' },
+	{ name: 'Server Update', value: 'server-update', description: 'Server: A server update is available' },
+	{ name: 'Server Update Downloading', value: 'server-update-downloading', description: 'Server: A server update is being downloaded' },
+	{ name: 'Server Update Installing', value: 'server-update-installing', description: 'Server: A server update is being installed' },
+];
 
 export class PhotonIMessageTrigger implements INodeType {
 	description: INodeTypeDescription = {
@@ -14,14 +42,21 @@ export class PhotonIMessageTrigger implements INodeType {
 		icon: 'file:photon-imessage.svg',
 		group: ['trigger'],
 		version: 1,
-		subtitle: '=New iMessage received',
-		description: 'Triggers when a new iMessage is received on the Photon server',
+		subtitle: '={{$parameter["events"].join(", ")}}',
+		description: 'Triggers on real-time iMessage events via the Photon Webhook service',
 		defaults: {
-			name: 'Photon iMessage Trigger',
+			name: 'On iMessage Event',
 		},
-		polling: true,
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
+		webhooks: [
+			{
+				name: 'default',
+				httpMethod: 'POST',
+				responseMode: 'onReceived',
+				path: 'webhook',
+			},
+		],
 		credentials: [
 			{
 				name: 'photonIMessageApi',
@@ -30,102 +65,150 @@ export class PhotonIMessageTrigger implements INodeType {
 		],
 		properties: [
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
-				type: 'string',
+				displayName:
+					'Configure webhook at <a href="https://webhook.photon.codes" target="_blank">webhook.photon.codes</a>. Use the Webhook URL shown below as the "Webhook URL" field.',
+				name: 'setupNotice',
+				type: 'notice',
 				default: '',
-				placeholder: 'iMessage;-;+1234567890',
-				description: 'Only trigger for messages in this chat (leave blank for all chats)',
 			},
 			{
-				displayName: 'Include Sent Messages',
-				name: 'includeSent',
-				type: 'boolean',
-				default: false,
-				description: 'Whether to include messages you sent (isFromMe = true)',
+				displayName: 'Events',
+				name: 'events',
+				type: 'multiOptions',
+				options: PHOTON_EVENTS,
+				default: ['new-message'],
+				required: true,
+				description: 'Which iMessage events to listen for',
 			},
 			{
-				displayName: 'Max Messages Per Poll',
-				name: 'limit',
-				type: 'number',
-				typeOptions: { minValue: 1 },
-				default: 50,
-				description: 'Max number of results to return',
+				displayName: 'Signing Secret',
+				name: 'signingSecret',
+				type: 'string',
+				typeOptions: { password: true },
+				default: '',
+				description: 'The signing secret you received when configuring the webhook at webhook.photon.codes. Used to verify incoming requests.',
+			},
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				options: [
+					{
+						displayName: 'Filter by Chat GUID',
+						name: 'chatGuid',
+						type: 'string',
+						default: '',
+						placeholder: 'iMessage;-;+1234567890',
+						description: 'Only trigger for events in this chat (leave blank for all)',
+					},
+					{
+						displayName: 'Ignore Own Messages',
+						name: 'ignoreOwn',
+						type: 'boolean',
+						default: true,
+						description: 'Whether to skip messages you sent (isFromMe = true)',
+					},
+				],
 			},
 		],
 		usableAsTool: true,
 	};
 
-	async poll(this: IPollFunctions): Promise<INodeExecutionData[][] | null> {
-		const credentials = await this.getCredentials('photonIMessageApi');
-		const baseUrl = (credentials.serverUrl as string).replace(/\/+$/, '');
-		const chatGuid = this.getNodeParameter('chatGuid') as string;
-		const includeSent = this.getNodeParameter('includeSent') as boolean;
+	webhookMethods = {
+		default: {
+			async checkExists(this: IHookFunctions): Promise<boolean> {
+				return true;
+			},
+			async create(this: IHookFunctions): Promise<boolean> {
+				return true;
+			},
+			async delete(this: IHookFunctions): Promise<boolean> {
+				return true;
+			},
+		},
+	};
 
-		const staticData = this.getWorkflowStaticData('node') as { lastChecked?: number };
+	async webhook(this: IWebhookFunctions): Promise<IWebhookResponseData> {
+		const req = this.getRequestObject();
+		const body = req.body as { event?: string; data?: Record<string, unknown> };
 
-		if (!staticData.lastChecked) {
-			staticData.lastChecked = Date.now();
-			return null;
+		const signingSecret = this.getNodeParameter('signingSecret', '') as string;
+
+		if (signingSecret) {
+			const signature = this.getHeaderData()['x-photon-signature'] as string | undefined;
+			const timestamp = this.getHeaderData()['x-photon-timestamp'] as string | undefined;
+
+			if (!signature || !timestamp) {
+				return { webhookResponse: 'Missing signature headers', noWebhookResponse: false };
+			}
+
+			const rawBody = typeof req.rawBody === 'string' ? req.rawBody : JSON.stringify(req.body);
+			const sigBase = `v0:${timestamp}:${rawBody}`;
+			const expected = `v0=${createHmac('sha256', signingSecret).update(sigBase).digest('hex')}`;
+
+			if (expected !== signature) {
+				return { webhookResponse: 'Invalid signature', noWebhookResponse: false };
+			}
 		}
 
-		const limit = this.getNodeParameter('limit') as number;
+		if (!body.event) {
+			return { webhookResponse: 'Missing event field', noWebhookResponse: false };
+		}
 
-		const body: Record<string, unknown> = {
-			after: staticData.lastChecked,
-			sort: 'ASC',
-			limit,
+		const selectedEvents = this.getNodeParameter('events', []) as string[];
+		if (!selectedEvents.includes('*') && !selectedEvents.includes(body.event)) {
+			return { noWebhookResponse: true };
+		}
+
+		const options = this.getNodeParameter('options', {}) as {
+			chatGuid?: string;
+			ignoreOwn?: boolean;
 		};
-		if (chatGuid) {
-			body.chatGuid = chatGuid;
+
+		const data = body.data ?? {};
+
+		if (options.ignoreOwn !== false && data.isFromMe) {
+			return { noWebhookResponse: true };
 		}
 
-		const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-			method: 'POST' as IHttpRequestMethods,
-			url: `${baseUrl}/api/v1/message/query`,
-			body,
-			json: true,
-		});
+		if (options.chatGuid) {
+			const chats = data.chats as Array<Record<string, unknown>> | undefined;
+			const chatGuids = chats?.map((c) => c.guid as string) ?? [];
+			const cacheRoomnames = data.cacheRoomnames as string | undefined;
 
-		const rawMessages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
-		if (!Array.isArray(rawMessages) || rawMessages.length === 0) {
-			return null;
+			const parts = options.chatGuid.split(';');
+			const addr = parts.length === 3 ? parts[2] : options.chatGuid;
+
+			const matches = chatGuids.some((g) => g.includes(addr)) ||
+				(cacheRoomnames != null && cacheRoomnames.includes(addr));
+
+			if (!matches) {
+				return { noWebhookResponse: true };
+			}
 		}
 
-		let messages = rawMessages;
-		if (!includeSent) {
-			messages = messages.filter((msg) => !msg.isFromMe);
-		}
+		const handle = data.handle as Record<string, unknown> | undefined;
+		const chats = data.chats as Array<Record<string, unknown>> | undefined;
+		const attachments = data.attachments as unknown[] | undefined;
 
-		const newestDate = rawMessages.reduce((max, msg) => {
-			const d = msg.dateCreated as number | undefined;
-			return d && d > max ? d : max;
-		}, staticData.lastChecked);
-		staticData.lastChecked = newestDate;
+		const output: INodeExecutionData = {
+			json: {
+				event: body.event,
+				guid: data.guid ?? null,
+				text: data.text ?? null,
+				sender: handle?.address ?? null,
+				chatGuid: chats?.[0]?.guid ?? null,
+				dateCreated: data.dateCreated ?? null,
+				isFromMe: data.isFromMe ?? false,
+				hasAttachments: Array.isArray(attachments) && attachments.length > 0,
+				rawData: data,
+			},
+		};
 
-		if (messages.length === 0) {
-			return null;
-		}
-
-		const returnData: INodeExecutionData[] = messages.map((msg) => {
-			const handle = msg.handle as Record<string, unknown> | undefined;
-			const chats = msg.chats as Array<Record<string, unknown>> | undefined;
-			const attachments = msg.attachments as unknown[] | undefined;
-
-			return {
-				json: {
-					id: msg.guid,
-					guid: msg.guid,
-					text: msg.text,
-					sender: handle?.address ?? null,
-					chatGuid: chats?.[0]?.guid ?? null,
-					dateCreated: msg.dateCreated,
-					isFromMe: msg.isFromMe,
-					hasAttachments: Array.isArray(attachments) && attachments.length > 0,
-				},
-			};
-		});
-
-		return [returnData];
+		return {
+			workflowData: [[output]],
+		};
 	}
 }
