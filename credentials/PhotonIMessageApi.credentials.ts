@@ -7,7 +7,7 @@ import type {
 
 export class PhotonIMessageApi implements ICredentialType {
 	name = 'photonIMessageApi';
-	displayName = 'iMessage API by Photon';
+	displayName = 'iMessage by Photon API';
 	icon = { light: 'file:../nodes/PhotonIMessage/Dark.svg', dark: 'file:../nodes/PhotonIMessage/Dark.svg' } as const;
 	documentationUrl = 'https://github.com/photon-hq/advanced-imessage-kit';
 	properties: INodeProperties[] = [
