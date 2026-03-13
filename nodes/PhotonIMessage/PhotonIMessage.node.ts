@@ -19,15 +19,15 @@ function generateTempGuid(): string {
 
 export class PhotonIMessage implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Photon iMessage',
+		displayName: 'iMessage by Photon',
 		name: 'photonIMessage',
-		icon: 'file:photon-imessage.svg',
+		icon: 'file:Dark.svg',
 		group: ['output'],
 		version: 1,
 		subtitle: '={{{"sendMessage":"Send Message","sendAttachment":"Send Attachment","unsendMessage":"Unsend Message","editMessage":"Edit Message","reactToMessage":"React to Message","downloadAttachment":"Download Attachment","searchMessages":"Search Messages","getMessages":"Get Messages","listChats":"List Chats","createChat":"Create Chat","markChatRead":"Mark Chat Read","startTyping":"Start Typing","stopTyping":"Stop Typing","createScheduledMessage":"Schedule Message","listScheduledMessages":"List Scheduled","deleteScheduledMessage":"Delete Scheduled","createPoll":"Create Poll","vote":"Vote on Poll","unvote":"Unvote on Poll","addOption":"Add Poll Option","shareContactCard":"Share Contact Card","checkAvailability":"Check iMessage Availability"}[$parameter["operation"]] || $parameter["operation"]}}',
 		description: 'Send, search, and manage iMessage conversations via the Photon server',
 		defaults: {
-			name: 'Photon iMessage',
+			name: 'iMessage by Photon',
 		},
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],

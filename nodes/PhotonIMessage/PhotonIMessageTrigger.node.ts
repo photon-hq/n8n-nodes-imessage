@@ -37,9 +37,9 @@ const PHOTON_EVENTS = [
 
 export class PhotonIMessageTrigger implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Photon iMessage Trigger',
+		displayName: 'iMessage by Photon Trigger',
 		name: 'photonIMessageTrigger',
-		icon: 'file:photon-imessage.svg',
+		icon: 'file:Dark.svg',
 		group: ['trigger'],
 		version: 1,
 		subtitle: '={{$parameter["events"].join(", ")}}',
