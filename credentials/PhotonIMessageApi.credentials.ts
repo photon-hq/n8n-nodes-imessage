@@ -15,9 +15,9 @@ export class PhotonIMessageApi implements ICredentialType {
 			displayName: 'Server URL',
 			name: 'serverUrl',
 			type: 'string',
-			default: 'http://localhost:1234',
-			placeholder: 'https://your-server.example.com',
-			description: 'Base URL of your Photon iMessage server (no trailing slash)',
+			default: '',
+			placeholder: 'https://example.imsgd.photon.codes',
+			description: 'Base URL of your Photon iMessage server (e.g. https://abc123.imsgd.photon.codes). No trailing slash.',
 			required: true,
 		},
 		{
