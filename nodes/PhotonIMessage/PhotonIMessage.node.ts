@@ -5,8 +5,9 @@ import type {
 	INodeTypeDescription,
 	IHttpRequestMethods,
 	IDataObject,
+	JsonObject,
 } from 'n8n-workflow';
-import { NodeConnectionTypes } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes } from 'n8n-workflow';
 
 function generateTempGuid(): string {
 	const hex = '0123456789abcdef';
@@ -1048,15 +1049,16 @@ export class PhotonIMessage implements INodeType {
 						const messages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(messages)) {
 							for (const msg of messages) {
-								returnData.push({
-									json: msg as IDataObject,
-								});
-							}
-							continue;
+							returnData.push({
+								json: msg as IDataObject,
+								pairedItem: { item: i },
+							});
 						}
-						responseData = messages;
+						continue;
+					}
+					responseData = messages;
 
-					} else if (operation === 'getMessages') {
+				} else if (operation === 'getMessages') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
 						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
@@ -1107,16 +1109,17 @@ export class PhotonIMessage implements INodeType {
 						const messages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(messages)) {
 							for (const msg of messages) {
-								returnData.push({
-									json: msg as IDataObject,
-								});
-							}
-							continue;
+							returnData.push({
+								json: msg as IDataObject,
+								pairedItem: { item: i },
+							});
 						}
-						responseData = messages;
+						continue;
 					}
+					responseData = messages;
+				}
 
-				// ===== CHAT =====
+			// ===== CHAT =====
 				} else if (resource === 'chat') {
 					if (operation === 'listChats') {
 						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
@@ -1147,15 +1150,16 @@ export class PhotonIMessage implements INodeType {
 								const isGroup = (chat.style as number) === 43;
 								const participantAddresses = participants?.map((p) => p.address as string) ?? [];
 
-								returnData.push({
-									json: {
-										...chat as IDataObject,
-										displayName: (chat.displayName as string) || (isGroup ? 'Group Chat' : participantAddresses[0] ?? ''),
-										isGroup,
-										participantAddresses,
-										participantCount: participantAddresses.length,
-									},
-								});
+							returnData.push({
+								json: {
+									...chat as IDataObject,
+									displayName: (chat.displayName as string) || (isGroup ? 'Group Chat' : participantAddresses[0] ?? ''),
+									isGroup,
+									participantAddresses,
+									participantCount: participantAddresses.length,
+								},
+								pairedItem: { item: i },
+							});
 							}
 							continue;
 						}
@@ -1256,9 +1260,10 @@ export class PhotonIMessage implements INodeType {
 						const schedules = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(schedules)) {
 							for (const sched of schedules) {
-								returnData.push({
-									json: sched as IDataObject,
-								});
+							returnData.push({
+								json: sched as IDataObject,
+								pairedItem: { item: i },
+							});
 							}
 							continue;
 						}
@@ -1374,19 +1379,21 @@ export class PhotonIMessage implements INodeType {
 					}
 				}
 
-				if (responseData !== undefined) {
-					returnData.push({
-						json: responseData as IDataObject,
-					});
+			if (responseData !== undefined) {
+				returnData.push({
+					json: responseData as IDataObject,
+					pairedItem: { item: i },
+				});
 				}
 			} catch (error) {
-				if (this.continueOnFail()) {
-					returnData.push({
-						json: { error: (error as Error).message },
-					});
+			if (this.continueOnFail()) {
+				returnData.push({
+					json: { error: (error as Error).message },
+					pairedItem: { item: i },
+				});
 					continue;
 				}
-				throw error;
+				throw new NodeApiError(this.getNode(), error as JsonObject);
 			}
 		}
 
