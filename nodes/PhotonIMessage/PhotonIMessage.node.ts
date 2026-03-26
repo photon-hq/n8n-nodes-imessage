@@ -7,7 +7,7 @@ import type {
 	IDataObject,
 	JsonObject,
 } from 'n8n-workflow';
-import { NodeApiError, NodeConnectionTypes } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 function generateTempGuid(): string {
 	const hex = '0123456789abcdef';
@@ -874,16 +874,47 @@ export class PhotonIMessage implements INodeType {
 			return [guid];
 		};
 
+		const enforceInboundFirstPolicy = async (chatGuid: string, itemIndex: number) => {
+			const guids = normalizeChatGuid(chatGuid);
+			const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
+			const guidArgs: Record<string, string> = {};
+			guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
+
+			const checkResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+				method: 'POST' as IHttpRequestMethods,
+				url: `${baseUrl}/api/v1/message/query`,
+				body: {
+					where: [
+						{ statement: `chat.guid IN (${guidPlaceholders})`, args: guidArgs },
+						{ statement: 'message.is_from_me = :fromMe', args: { fromMe: 0 } },
+					],
+					limit: 1,
+					sort: 'DESC',
+				},
+				json: true,
+			});
+
+			const inboundMessages = (checkResponse as { data?: unknown[] }).data;
+			if (!Array.isArray(inboundMessages) || inboundMessages.length === 0) {
+				throw new NodeOperationError(
+					this.getNode(),
+					'Inbound-first policy: this contact has not messaged your number yet. To prevent spam, messages can only be sent to contacts who have initiated a conversation first.',
+					{ itemIndex },
+				);
+			}
+		};
+
 		for (let i = 0; i < items.length; i++) {
 			try {
 				let responseData: unknown;
 
 				// ===== MESSAGE =====
 				if (resource === 'message') {
-					if (operation === 'sendMessage') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const message = this.getNodeParameter('message', i) as string;
-						const additionalFields = this.getNodeParameter('additionalFields', i) as {
+				if (operation === 'sendMessage') {
+					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+					await enforceInboundFirstPolicy(chatGuid, i);
+					const message = this.getNodeParameter('message', i) as string;
+					const additionalFields = this.getNodeParameter('additionalFields', i) as {
 							method?: string;
 							subject?: string;
 							effectId?: string;
@@ -908,9 +939,10 @@ export class PhotonIMessage implements INodeType {
 						});
 						responseData = (response as { data?: unknown }).data ?? response;
 
-					} else if (operation === 'sendAttachment') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const filePath = this.getNodeParameter('filePath', i) as string;
+				} else if (operation === 'sendAttachment') {
+					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+					await enforceInboundFirstPolicy(chatGuid, i);
+					const filePath = this.getNodeParameter('filePath', i) as string;
 						const additionalFields = this.getNodeParameter('attachmentAdditionalFields', i) as {
 							fileName?: string;
 							isAudioMessage?: boolean;
@@ -1220,9 +1252,10 @@ export class PhotonIMessage implements INodeType {
 
 				// ===== SCHEDULED MESSAGE =====
 				} else if (resource === 'scheduledMessage') {
-					if (operation === 'createScheduledMessage') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const message = this.getNodeParameter('message', i) as string;
+				if (operation === 'createScheduledMessage') {
+					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
+					await enforceInboundFirstPolicy(chatGuid, i);
+					const message = this.getNodeParameter('message', i) as string;
 						const sendAt = this.getNodeParameter('sendAt', i) as string;
 						const scheduleType = this.getNodeParameter('scheduleType', i) as string;
 
