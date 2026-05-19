@@ -1,11 +1,13 @@
 {
 	"name": "n8n-nodes-imessage",
-	"version": "0.3.5",
-	"description": "n8n community node for Photon iMessage — send, receive, and automate iMessage conversations via the Photon server",
+	"version": "1.0.0",
+	"description": "n8n community node for iMessage by Photon — send, receive, and automate iMessage conversations built on Spectrum",
 	"license": "MIT",
 	"keywords": [
 		"n8n-community-node-package",
 		"imessage",
+		"spectrum",
+		"photon",
 		"n8n",
 		"automation",
 		"messaging",
@@ -37,18 +39,25 @@
 	},
 	"files": [
 		"dist",
+		"bin",
 		"npm-shrinkwrap.json"
 	],
+	"bin": {
+		"n8n-nodes-imessage": "bin/photon-imessage-login.cjs"
+	},
 	"n8n": {
 		"n8nNodesApiVersion": 1,
 		"strict": true,
 		"credentials": [
-			"dist/credentials/PhotonIMessageApi.credentials.js"
+			"dist/credentials/PhotonSpectrumApi.credentials.js"
 		],
 		"nodes": [
 			"dist/nodes/PhotonIMessage/PhotonIMessage.node.js",
 			"dist/nodes/PhotonIMessage/PhotonIMessageTrigger.node.js"
 		]
+	},
+	"dependencies": {
+		"spectrum-ts": "^1.9.1"
 	},
 	"devDependencies": {
 		"@n8n/node-cli": "*",

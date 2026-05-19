@@ -1,21 +1,50 @@
 import type {
+	IDataObject,
 	IExecuteFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
-	IHttpRequestMethods,
-	IDataObject,
 	JsonObject,
 } from 'n8n-workflow';
-import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { ApplicationError, NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
-function generateTempGuid(): string {
-	const hex = '0123456789abcdef';
-	let result = 'temp_';
-	for (let i = 0; i < 32; i++) {
-		result += hex[Math.floor(Math.random() * 16)];
-	}
-	return result;
+import { getSpectrumCredentials } from './lib/credentials';
+import { resolveEffect } from './lib/effects';
+import { enforceInboundFirst } from './lib/inboundFirst';
+import { withSpectrum, type SpectrumSession } from './lib/spectrumClient';
+import {
+	BUBBLE_EFFECTS,
+	SCREEN_EFFECTS,
+	TAPBACKS,
+	type IMessageEffect,
+	type SpectrumCredentials,
+	type Tapback,
+} from './lib/types';
+
+const REACTION_OPTIONS = TAPBACKS.map((t) => ({
+	name: t.charAt(0).toUpperCase() + t.slice(1),
+	value: t,
+}));
+
+const EFFECT_OPTIONS = [
+	{ name: 'None', value: 'none' as const, description: 'No special effect' },
+	...BUBBLE_EFFECTS.map((e) => ({
+		name: `Bubble: ${e.charAt(0).toUpperCase() + e.slice(1)}`,
+		value: e,
+		description: 'Bubble effect — animates the message itself',
+	})),
+	...SCREEN_EFFECTS.map((e) => ({
+		name: `Screen: ${e.charAt(0).toUpperCase() + e.slice(1)}`,
+		value: e,
+		description: 'Screen effect — animates the recipient screen',
+	})),
+];
+
+function splitAddresses(raw: string): string[] {
+	return raw
+		.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
 }
 
 export class PhotonIMessage implements INodeType {
@@ -25,39 +54,37 @@ export class PhotonIMessage implements INodeType {
 		icon: 'file:Dark.svg',
 		group: ['output'],
 		version: 1,
-		subtitle: '={{{"sendMessage":"Send Message","sendAttachment":"Send Attachment","unsendMessage":"Unsend Message","editMessage":"Edit Message","reactToMessage":"React to Message","downloadAttachment":"Download Attachment","searchMessages":"Search Messages","getMessages":"Get Messages","listChats":"List Chats","createChat":"Create Chat","markChatRead":"Mark Chat Read","startTyping":"Start Typing","stopTyping":"Stop Typing","createScheduledMessage":"Schedule Message","listScheduledMessages":"List Scheduled","deleteScheduledMessage":"Delete Scheduled","createPoll":"Create Poll","vote":"Vote on Poll","unvote":"Unvote on Poll","addOption":"Add Poll Option","shareContactCard":"Share Contact Card","checkAvailability":"Check iMessage Availability"}[$parameter["operation"]] || $parameter["operation"]}}',
-		description: 'Send, search, and manage iMessage conversations via the Photon server',
-		defaults: {
-			name: 'iMessage by Photon',
-		},
+		subtitle:
+			'={{ ({"sendMessage":"Send Message","sendAttachment":"Send Attachment","sendVoice":"Send Voice Note","sendContact":"Share Contact","sendRichLink":"Send Rich Link","sendGroup":"Send Group (Album)","editMessage":"Edit Message","reactToMessage":"React","replyToMessage":"Reply","createSpace":"Create / Resolve Space","startTyping":"Start Typing","stopTyping":"Stop Typing","setBackground":"Set Chat Background","createPoll":"Create Poll"}[$parameter["operation"]] || $parameter["operation"]) }}',
+		description: 'Send iMessages, react, reply, edit, share contacts, set chat backgrounds, and more — backed by Spectrum',
+		defaults: { name: 'iMessage by Photon' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		usableAsTool: true,
 		credentials: [
 			{
-				name: 'photonIMessageApi',
+				name: 'photonSpectrumApi',
 				required: true,
 			},
 		],
 		properties: [
-			// ------ Resource selector ------
 			{
 				displayName: 'Resource',
 				name: 'resource',
 				type: 'options',
 				noDataExpression: true,
 				options: [
-					{ name: 'Chat', value: 'chat', description: 'Create and manage conversations' },
+					{ name: 'Message', value: 'message', description: 'Send, react, reply, or edit messages' },
+					{ name: 'Space', value: 'space', description: 'Create or resolve conversations, manage typing, set backgrounds' },
+					{ name: 'Poll', value: 'poll', description: 'Create polls in a conversation' },
 					{ name: 'Contact', value: 'contact', description: 'Share contact cards' },
-					{ name: 'Handle', value: 'handle', description: 'Check iMessage availability' },
-					{ name: 'Message', value: 'message', description: 'Send, search, and manage messages' },
-					{ name: 'Poll', value: 'poll', description: 'Create and manage polls in chats' },
-					{ name: 'Scheduled Message', value: 'scheduledMessage', description: 'Schedule messages for later delivery' },
 				],
 				default: 'message',
 			},
 
-			// ====== MESSAGE operations ======
+			// =====================================================================
+			// MESSAGE
+			// =====================================================================
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -65,43 +92,49 @@ export class PhotonIMessage implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['message'] } },
 				options: [
-					{ name: 'Download Attachment', value: 'downloadAttachment', action: 'Download an attachment', description: 'Download a received file or media attachment' },
-					{ name: 'Edit Message', value: 'editMessage', action: 'Edit a message', description: 'Edit the text of a previously sent message' },
-					{ name: 'Get Messages', value: 'getMessages', action: 'Get messages', description: 'Retrieve messages from a chat' },
-					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback reaction (love, like, laugh, etc.)' },
-					{ name: 'Search Messages', value: 'searchMessages', action: 'Search messages', description: 'Search messages by text content across chats' },
-					{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file attachment to a chat' },
-					{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message to a chat' },
-					{ name: 'Unsend Message', value: 'unsendMessage', action: 'Unsend a message', description: 'Retract a sent message (recipients will see it was unsent)' },
+					{ name: 'Edit Message', value: 'editMessage', action: 'Edit a sent message', description: 'Edit the text of a previously sent message you own' },
+					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback reaction' },
+					{ name: 'Reply to Message', value: 'replyToMessage', action: 'Reply in thread', description: 'Send a threaded reply to a specific message' },
+					{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file from a path or n8n binary input' },
+					{ name: 'Send Group (Album)', value: 'sendGroup', action: 'Send a bundled group', description: 'Bundle multiple items into one logical unit (album)' },
+					{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message (optionally with an effect)' },
+					{ name: 'Send Rich Link', value: 'sendRichLink', action: 'Send a rich link preview', description: 'Send a URL rendered as a rich link card (Open Graph)' },
+					{ name: 'Send Voice Note', value: 'sendVoice', action: 'Send a voice note', description: 'Send an audio clip rendered as an iMessage voice note' },
 				],
 				default: 'sendMessage',
 			},
-			// --- Send Message fields ---
+
+			// --- Common: Recipients (DM = 1 address, Group = many)
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'Recipients',
+				name: 'recipients',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
-				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
+				placeholder: '+15551234567 or alice@example.com (comma-separated for group)',
+				description: 'Phone (E.164) or email of the recipient(s). One for a DM, multiple for a group chat.',
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['sendMessage', 'sendAttachment', 'sendVoice', 'sendRichLink', 'sendGroup'],
+					},
+				},
 			},
+
+			// --- Send Message
 			{
 				displayName: 'Message Text',
-				name: 'message',
+				name: 'text',
 				type: 'string',
 				typeOptions: { rows: 4 },
 				required: true,
 				default: '',
-				placeholder: 'Hello! How are you?',
-				description: 'The text content of the message to send',
+				placeholder: 'Hello!',
 				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
 			},
 			{
 				displayName: 'Additional Fields',
-				name: 'additionalFields',
+				name: 'sendMessageOptions',
 				type: 'collection',
 				placeholder: 'Add Field',
 				default: {},
@@ -109,66 +142,35 @@ export class PhotonIMessage implements INodeType {
 				options: [
 					{
 						displayName: 'Effect',
-						name: 'effectId',
+						name: 'effect',
 						type: 'options',
-						options: [
-							{ name: 'Balloons', value: 'com.apple.messages.effect.CKBalloonEffect', description: 'Screen: floating balloons' },
-							{ name: 'Confetti', value: 'com.apple.messages.effect.CKConfettiEffect', description: 'Screen: confetti celebration' },
-							{ name: 'Echo', value: 'com.apple.messages.effect.CKEchoEffect', description: 'Screen: message multiplies' },
-							{ name: 'Fireworks', value: 'com.apple.messages.effect.CKFireworksEffect', description: 'Screen: fireworks display' },
-							{ name: 'Gentle', value: 'com.apple.MobileSMS.expressivesend.gentle', description: 'Bubble: gentle send animation' },
-							{ name: 'Hearts', value: 'com.apple.messages.effect.CKHeartEffect', description: 'Screen: floating hearts' },
-							{ name: 'Invisible Ink', value: 'com.apple.MobileSMS.expressivesend.invisibleink', description: 'Bubble: hidden until swiped' },
-							{ name: 'Lasers', value: 'com.apple.messages.effect.CKHappyBirthdayEffect', description: 'Screen: laser light show' },
-							{ name: 'Loud', value: 'com.apple.MobileSMS.expressivesend.loud', description: 'Bubble: grows large with shake' },
-							{ name: 'None', value: '', description: 'No special effect' },
-							{ name: 'Shooting Star', value: 'com.apple.messages.effect.CKShootingStarEffect', description: 'Screen: shooting star streak' },
-							{ name: 'Slam', value: 'com.apple.MobileSMS.expressivesend.impact', description: 'Bubble: slams onto screen' },
-							{ name: 'Sparkles', value: 'com.apple.messages.effect.CKSparklesEffect', description: 'Screen: sparkle animation' },
-							{ name: 'Spotlight', value: 'com.apple.messages.effect.CKSpotlightEffect', description: 'Screen: spotlight on message' },
-						],
-						default: '',
-						description: 'IMessage effect to send with the message. Bubble effects animate the message itself; Screen effects animate the full screen.',
+						options: EFFECT_OPTIONS,
+						default: 'none',
+						description: 'IMessage bubble (animates message) or screen (full-screen) effect',
 					},
 					{
-						displayName: 'Reply to Message GUID',
-						name: 'selectedMessageGuid',
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
 						type: 'string',
 						default: '',
-						placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
-						description: 'GUID of a message to reply to as an inline thread',
-					},
-					{
-						displayName: 'Subject',
-						name: 'subject',
-						type: 'string',
-						default: '',
-						description: 'Optional subject line (shown as bold header in the message)',
-					},
-					{
-						displayName: 'Send Method',
-						name: 'method',
-						type: 'options',
-						options: [
-							{ name: 'Private API (Recommended)', value: 'private-api' },
-							{ name: 'AppleScript (Fallback)', value: 'apple-script' },
-						],
-						default: 'private-api',
-						description: 'How to send the message. Private API supports all features; AppleScript is a fallback if Private API is unavailable.',
+						placeholder: '+15559999999',
+						description:
+							'For Business-plan dedicated lines: pin this conversation to a specific line. Ignored on shared-pool plans.',
 					},
 				],
 			},
-			// --- Send Attachment fields ---
+
+			// --- Send Attachment
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
-				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
+				displayName: 'Source',
+				name: 'attachmentSource',
+				type: 'options',
+				options: [
+					{ name: 'File Path', value: 'path', description: 'Absolute file path readable by the n8n process' },
+					{ name: 'Binary Property', value: 'binary', description: 'Use the binary data on the incoming item' },
+				],
+				default: 'path',
+				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment', 'sendVoice'] } },
 			},
 			{
 				displayName: 'File Path',
@@ -177,513 +179,306 @@ export class PhotonIMessage implements INodeType {
 				required: true,
 				default: '',
 				placeholder: '/Users/you/Desktop/photo.jpg',
-				description: 'Absolute file path on the Photon server Mac. The file must exist on the machine running the Photon server.',
-				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['sendAttachment', 'sendVoice'],
+						attachmentSource: ['path'],
+					},
+				},
+			},
+			{
+				displayName: 'Binary Property',
+				name: 'binaryProperty',
+				type: 'string',
+				required: true,
+				default: 'data',
+				description: 'Name of the binary property on the incoming item that holds the file',
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['sendAttachment', 'sendVoice'],
+						attachmentSource: ['binary'],
+					},
+				},
 			},
 			{
 				displayName: 'Additional Fields',
-				name: 'attachmentAdditionalFields',
+				name: 'attachmentOptions',
 				type: 'collection',
 				placeholder: 'Add Field',
 				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
+				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment', 'sendVoice'] } },
 				options: [
 					{
 						displayName: 'File Name',
 						name: 'fileName',
 						type: 'string',
 						default: '',
-						placeholder: 'photo.jpg',
-						description: 'Override the file name shown to the recipient',
+						description: 'Override the filename shown to the recipient',
 					},
 					{
-						displayName: 'Send as Voice Message',
-						name: 'isAudioMessage',
-						type: 'boolean',
-						default: false,
-						description: 'Whether to send the audio file as an iMessage voice message (plays inline with waveform)',
+						displayName: 'MIME Type',
+						name: 'mimeType',
+						type: 'string',
+						default: '',
+						description:
+							'Override the MIME type. Required when using binary input and the type cannot be inferred from the filename.',
+					},
+					{
+						displayName: 'Voice Duration (Seconds)',
+						name: 'duration',
+						type: 'number',
+						default: 0,
+						description: 'Voice notes only — clip length in seconds (used for waveform UI)',
+					},
+					{
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
+						type: 'string',
+						default: '',
+						placeholder: '+15559999999',
 					},
 				],
 			},
-			// --- React to Message fields ---
+
+			// --- Send Rich Link
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'URL',
+				name: 'url',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
-				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
+				placeholder: 'https://example.com/article',
+				displayOptions: { show: { resource: ['message'], operation: ['sendRichLink'] } },
 			},
 			{
-				displayName: 'Message GUID',
-				name: 'messageGuid',
+				displayName: 'Additional Fields',
+				name: 'richLinkOptions',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['sendRichLink'] } },
+				options: [
+					{
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
+						type: 'string',
+						default: '',
+					},
+				],
+			},
+
+			// --- Send Group (Album)
+			{
+				displayName: 'Items',
+				name: 'groupItems',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true, sortable: true },
+				required: true,
+				default: { items: [] },
+				placeholder: 'Add Item',
+				displayOptions: { show: { resource: ['message'], operation: ['sendGroup'] } },
+				options: [
+					{
+						displayName: 'Item',
+						name: 'items',
+						values: [
+							{
+								displayName: 'Kind',
+								name: 'kind',
+								type: 'options',
+								options: [
+									{ name: 'Attachment (Path)', value: 'attachmentPath' },
+									{ name: 'Attachment (Binary)', value: 'attachmentBinary' },
+									{ name: 'Text', value: 'text' },
+								],
+								default: 'attachmentPath',
+							},
+							{
+								displayName: 'Value',
+								name: 'value',
+								type: 'string',
+								default: '',
+								description:
+									'For Attachment (Path): the file path. For Attachment (Binary): the binary property name. For Text: the text to send.',
+							},
+						],
+					},
+				],
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'groupOptions',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['sendGroup'] } },
+				options: [
+					{
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
+						type: 'string',
+						default: '',
+					},
+				],
+			},
+
+			// --- Reply / Edit / React: all keyed off recipient + message id
+			{
+				displayName: 'Recipients',
+				name: 'targetRecipients',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
-				description: 'The GUID of the message to react to. Found in the output of "Get Messages" or the trigger node.',
-				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
+				placeholder: '+15551234567 (DM) or +1...,+1... (group)',
+				description:
+					'Phone/email of the conversation containing the target message. Use `sender` from the Trigger payload for DM replies.',
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['replyToMessage', 'editMessage', 'reactToMessage'],
+					},
+				},
+			},
+			{
+				displayName: 'Send From Phone',
+				name: 'replyFromPhone',
+				type: 'string',
+				default: '',
+				placeholder: '+15559999999',
+				description:
+					'Dedicated lines only — pin to a specific line. Leave blank for shared pool.',
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['replyToMessage', 'editMessage', 'reactToMessage'],
+					},
+				},
+			},
+			{
+				displayName: 'Target Message ID',
+				name: 'targetMessageId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'spc-msg-…',
+				description:
+					'The ID of the message to reply to / react to / edit. Found in Trigger payload as `messageId`.',
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['replyToMessage', 'editMessage', 'reactToMessage'],
+					},
+				},
+			},
+			{
+				displayName: 'Reply Text',
+				name: 'replyText',
+				type: 'string',
+				typeOptions: { rows: 3 },
+				required: true,
+				default: '',
+				displayOptions: { show: { resource: ['message'], operation: ['replyToMessage'] } },
+			},
+			{
+				displayName: 'New Text',
+				name: 'editText',
+				type: 'string',
+				typeOptions: { rows: 3 },
+				required: true,
+				default: '',
+				description: 'Replacement text. Only text edits are supported on iMessage.',
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
 			},
 			{
 				displayName: 'Reaction',
 				name: 'reaction',
 				type: 'options',
+				options: REACTION_OPTIONS,
 				required: true,
-				options: [
-					{ name: 'Dislike', value: 'dislike', description: '👎 Thumbs down' },
-					{ name: 'Emphasize', value: 'emphasize', description: '‼️ Double exclamation' },
-					{ name: 'Laugh', value: 'laugh', description: '😂 Ha ha' },
-					{ name: 'Like', value: 'like', description: '👍 Thumbs up' },
-					{ name: 'Love', value: 'love', description: '❤️ Heart' },
-					{ name: 'Question', value: 'question', description: '❓ Question mark' },
-				],
 				default: 'love',
-				description: 'The tapback reaction to send',
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'reactAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
-				options: [
-					{
-						displayName: 'Part Index',
-						name: 'partIndex',
-						type: 'number',
-						default: 0,
-						description: 'Which part of the message to react to (0 for the first part). Only needed for multi-part messages.',
-					},
-				],
-			},
-			// --- Get Messages fields ---
-			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
-				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
-			},
-			{
-				displayName: 'Return All',
-				name: 'returnAll',
-				type: 'boolean',
-				default: false,
-				description: 'Whether to return all results or only up to a given limit',
-				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
-			},
-			{
-				displayName: 'Limit',
-				name: 'limit',
-				type: 'number',
-				typeOptions: { minValue: 1 },
-				default: 50,
-				description: 'Max number of results to return',
-				displayOptions: { show: { resource: ['message'], operation: ['getMessages'], returnAll: [false] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'getMessagesAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['getMessages'] } },
-				options: [
-					{
-						displayName: 'After',
-						name: 'after',
-						type: 'dateTime',
-						default: '',
-						description: 'Only return messages sent after this date/time',
-					},
-					{
-						displayName: 'Before',
-						name: 'before',
-						type: 'dateTime',
-						default: '',
-						description: 'Only return messages sent before this date/time',
-					},
-					{
-						displayName: 'Sort',
-						name: 'sort',
-						type: 'options',
-						options: [
-							{ name: 'Newest First', value: 'DESC' },
-							{ name: 'Oldest First', value: 'ASC' },
-						],
-						default: 'DESC',
-						description: 'Sort order of results',
-					},
-				],
-			},
-			// --- Search Messages fields ---
-			{
-				displayName: 'Query',
-				name: 'query',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. dinner tonight',
-				description: 'Text to search for in messages',
-				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'] } },
-			},
-			{
-				displayName: 'Return All',
-				name: 'returnAll',
-				type: 'boolean',
-				default: false,
-				description: 'Whether to return all results or only up to a given limit',
-				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'] } },
-			},
-			{
-				displayName: 'Limit',
-				name: 'limit',
-				type: 'number',
-				typeOptions: { minValue: 1 },
-				default: 50,
-				description: 'Max number of results to return',
-				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'], returnAll: [false] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'searchAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['searchMessages'] } },
-				options: [
-					{
-						displayName: 'Chat GUID',
-						name: 'chatGuid',
-						type: 'string',
-						default: '',
-						placeholder: 'e.g. iMessage;-;+1234567890',
-						description: 'Limit search to a specific chat (leave empty to search all chats)',
-					},
-					{
-						displayName: 'Sort',
-						name: 'sort',
-						type: 'options',
-						options: [
-							{ name: 'Newest First', value: 'DESC' },
-							{ name: 'Oldest First', value: 'ASC' },
-						],
-						default: 'DESC',
-						description: 'Sort order of results',
-					},
-				],
-			},
-			// --- Download Attachment fields ---
-			{
-				displayName: 'Attachment GUID',
-				name: 'attachmentGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
-				description: 'The GUID of the attachment to download. Found in message data from "Get Messages" or the trigger node.',
-				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'downloadAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['downloadAttachment'] } },
-				options: [
-					{
-						displayName: 'Height',
-						name: 'height',
-						type: 'number',
-						default: 0,
-						description: 'Resize image to this height in pixels (0 = original size)',
-					},
-					{
-						displayName: 'Quality',
-						name: 'quality',
-						type: 'number',
-						typeOptions: { minValue: 1, maxValue: 100 },
-						default: 80,
-						description: 'JPEG quality (1-100). Only applies to image attachments.',
-					},
-					{
-						displayName: 'Width',
-						name: 'width',
-						type: 'number',
-						default: 0,
-						description: 'Resize image to this width in pixels (0 = original size)',
-					},
-				],
-			},
-			// --- Edit Message fields ---
-			{
-				displayName: 'Message GUID',
-				name: 'messageGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
-				description: 'The GUID of the message to edit. You can only edit messages you sent.',
-				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
-			},
-			{
-				displayName: 'New Text',
-				name: 'editedMessage',
-				type: 'string',
-				typeOptions: { rows: 4 },
-				required: true,
-				default: '',
-				description: 'The replacement text for the message',
-				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'editAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
-				options: [
-					{
-						displayName: 'Part Index',
-						name: 'editPartIndex',
-						type: 'number',
-						default: 0,
-						description: 'Which part of the message to edit (0 for the first part). Only needed for multi-part messages.',
-					},
-				],
-			},
-			// --- Unsend Message fields ---
-			{
-				displayName: 'Message GUID',
-				name: 'messageGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. p:0/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX',
-				description: 'The GUID of the message to unsend. You can only unsend messages you sent. Recipients will see "X unsent a message".',
-				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'unsendAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['unsendMessage'] } },
-				options: [
-					{
-						displayName: 'Part Index',
-						name: 'unsendPartIndex',
-						type: 'number',
-						default: 0,
-						description: 'Which part of the message to unsend (0 for the first part). Only needed for multi-part messages.',
-					},
-				],
 			},
 
-			// ====== CHAT operations ======
+			// =====================================================================
+			// SPACE
+			// =====================================================================
 			{
 				displayName: 'Operation',
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { resource: ['chat'] } },
+				displayOptions: { show: { resource: ['space'] } },
 				options: [
-					{ name: 'Create Chat', value: 'createChat', action: 'Create a chat', description: 'Start a new conversation with one or more participants' },
-					{ name: 'List Chats', value: 'listChats', action: 'List chats', description: 'Retrieve recent conversations with participants and last message' },
-					{ name: 'Mark Chat Read', value: 'markChatRead', action: 'Mark a chat as read', description: 'Mark all messages in a chat as read' },
-					{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator', description: 'Show the typing bubble (…) in a chat' },
-					{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator', description: 'Hide the typing bubble' },
+					{ name: 'Create / Resolve Space', value: 'createSpace', action: 'Create or resolve a conversation', description: 'Resolve a DM (one recipient) or group (many recipients) and return its Space ID' },
+					{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator' },
+					{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator' },
+					{ name: 'Set Background', value: 'setBackground', action: 'Set chat background image' },
 				],
-				default: 'listChats',
-			},
-			// --- List Chats fields ---
-			{
-				displayName: 'Return All',
-				name: 'returnAll',
-				type: 'boolean',
-				default: false,
-				description: 'Whether to return all results or only up to a given limit',
-				displayOptions: { show: { resource: ['chat'], operation: ['listChats'] } },
+				default: 'createSpace',
 			},
 			{
-				displayName: 'Limit',
-				name: 'limit',
-				type: 'number',
-				typeOptions: { minValue: 1 },
-				default: 50,
-				description: 'Max number of results to return',
-				displayOptions: { show: { resource: ['chat'], operation: ['listChats'], returnAll: [false] } },
-			},
-			{
-				displayName: 'Additional Fields',
-				name: 'listChatsAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['chat'], operation: ['listChats'] } },
-				options: [
-					{
-						displayName: 'Include Last Message',
-						name: 'withLastMessage',
-						type: 'boolean',
-						default: true,
-						description: 'Whether to include the last message preview for each chat',
-					},
-				],
-			},
-			// --- Create Chat fields ---
-			{
-				displayName: 'Participants',
-				name: 'phoneNumbers',
+				displayName: 'Recipients',
+				name: 'spaceRecipients',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: '+1234567890, +0987654321',
-				description: 'Comma-separated phone numbers or email addresses. Use one participant for a DM or multiple for a group chat.',
-				displayOptions: { show: { resource: ['chat'], operation: ['createChat'] } },
+				placeholder: '+15551234567 (DM) or +1..., +1... (group)',
+				description: 'Phone or email of the recipient(s). One = DM. Two or more = group.',
+				displayOptions: { show: { resource: ['space'], operation: ['createSpace', 'startTyping', 'stopTyping', 'setBackground'] } },
 			},
 			{
-				displayName: 'Additional Fields',
-				name: 'createChatAdditionalFields',
-				type: 'collection',
-				placeholder: 'Add Field',
-				default: {},
-				displayOptions: { show: { resource: ['chat'], operation: ['createChat'] } },
-				options: [
-					{
-						displayName: 'Initial Message',
-						name: 'message',
-						type: 'string',
-						typeOptions: { rows: 3 },
-						default: '',
-						placeholder: 'Hey! Added you to the group.',
-						description: 'Send a message immediately when creating the chat',
-					},
-					{
-						displayName: 'Service',
-						name: 'service',
-						type: 'options',
-						options: [
-							{ name: 'iMessage', value: 'iMessage' },
-							{ name: 'SMS', value: 'SMS' },
-						],
-						default: 'iMessage',
-						description: 'The messaging service to use. SMS is only available for phone numbers.',
-					},
-				],
-			},
-			// --- Mark Chat Read fields ---
-			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'Send From Phone',
+				name: 'spaceFromPhone',
 				type: 'string',
-				required: true,
 				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
-				displayOptions: { show: { resource: ['chat'], operation: ['markChatRead'] } },
-			},
-
-			// --- Start/Stop Typing fields ---
-			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
-				displayOptions: { show: { resource: ['chat'], operation: ['startTyping', 'stopTyping'] } },
-			},
-
-			// ====== SCHEDULED MESSAGE operations ======
-			{
-				displayName: 'Operation',
-				name: 'operation',
-				type: 'options',
-				noDataExpression: true,
-				displayOptions: { show: { resource: ['scheduledMessage'] } },
-				options: [
-					{ name: 'Create Scheduled Message', value: 'createScheduledMessage', action: 'Create a scheduled message', description: 'Schedule a message to be sent at a future date/time' },
-					{ name: 'List Scheduled Messages', value: 'listScheduledMessages', action: 'List scheduled messages', description: 'Get all pending scheduled messages' },
-					{ name: 'Delete Scheduled Message', value: 'deleteScheduledMessage', action: 'Delete a scheduled message', description: 'Cancel and remove a scheduled message before it sends' },
-				],
-				default: 'createScheduledMessage',
-			},
-			// --- Create Scheduled Message fields ---
-			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" or "Create Chat" operation to find this value.',
-				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
+				placeholder: '+15559999999',
+				description: 'Dedicated lines only — pin the conversation to a specific line',
+				displayOptions: { show: { resource: ['space'] } },
 			},
 			{
-				displayName: 'Message',
-				name: 'message',
-				type: 'string',
-				typeOptions: { rows: 4 },
-				required: true,
-				default: '',
-				placeholder: 'Happy birthday! 🎂',
-				description: 'The text content of the scheduled message',
-				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
-			},
-			{
-				displayName: 'Send At',
-				name: 'sendAt',
-				type: 'dateTime',
-				required: true,
-				default: '',
-				description: 'The date and time when the message should be sent',
-				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
-			},
-			{
-				displayName: 'Repeat',
-				name: 'scheduleType',
+				displayName: 'Source',
+				name: 'backgroundSource',
 				type: 'options',
 				options: [
-					{ name: 'Daily', value: 'daily', description: 'Repeat every day at the same time' },
-					{ name: 'Hourly', value: 'hourly', description: 'Repeat every hour' },
-					{ name: 'Monthly', value: 'monthly', description: 'Repeat every month on the same date' },
-					{ name: 'Once (No Repeat)', value: 'once', description: 'Send only once at the scheduled time' },
-					{ name: 'Weekly', value: 'weekly', description: 'Repeat every week on the same day' },
-					{ name: 'Yearly', value: 'yearly', description: 'Repeat every year on the same date' },
+					{ name: 'File Path', value: 'path' },
+					{ name: 'Binary Property', value: 'binary' },
+					{ name: 'Clear', value: 'clear', description: 'Remove the current chat background' },
 				],
-				default: 'once',
-				description: 'How often to repeat sending this message',
-				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['createScheduledMessage'] } },
+				default: 'path',
+				displayOptions: { show: { resource: ['space'], operation: ['setBackground'] } },
 			},
-			// --- Delete Scheduled Message fields ---
 			{
-				displayName: 'Scheduled Message ID',
-				name: 'scheduledMessageId',
+				displayName: 'File Path',
+				name: 'backgroundPath',
 				type: 'string',
-				required: true,
 				default: '',
-				description: 'The ID of the scheduled message to delete. Use "List Scheduled Messages" to find this value.',
-				displayOptions: { show: { resource: ['scheduledMessage'], operation: ['deleteScheduledMessage'] } },
+				placeholder: '/Users/you/Desktop/wallpaper.jpg',
+				required: true,
+				displayOptions: { show: { resource: ['space'], operation: ['setBackground'], backgroundSource: ['path'] } },
+			},
+			{
+				displayName: 'Binary Property',
+				name: 'backgroundBinary',
+				type: 'string',
+				default: 'data',
+				required: true,
+				displayOptions: { show: { resource: ['space'], operation: ['setBackground'], backgroundSource: ['binary'] } },
+			},
+			{
+				displayName: 'MIME Type',
+				name: 'backgroundMime',
+				type: 'string',
+				default: '',
+				placeholder: 'image/jpeg',
+				description: 'Required when using a binary source',
+				displayOptions: { show: { resource: ['space'], operation: ['setBackground'], backgroundSource: ['binary'] } },
 			},
 
-			// ====== POLL operations ======
+			// =====================================================================
+			// POLL
+			// =====================================================================
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -691,32 +486,27 @@ export class PhotonIMessage implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['poll'] } },
 				options: [
-					{ name: 'Create Poll', value: 'createPoll', action: 'Create a poll', description: 'Create an interactive poll in a group chat' },
-					{ name: 'Vote', value: 'vote', action: 'Vote on a poll', description: 'Cast a vote on a poll option' },
-					{ name: 'Unvote', value: 'unvote', action: 'Remove vote from a poll', description: 'Remove your vote from a poll option' },
-					{ name: 'Add Option', value: 'addOption', action: 'Add a poll option', description: 'Add a new option to an existing poll' },
+					{ name: 'Create Poll', value: 'createPoll', action: 'Create a poll' },
 				],
 				default: 'createPoll',
 			},
-			// --- Create Poll fields ---
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'Recipients',
+				name: 'pollRecipients',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'e.g. iMessage;+;chat123456',
-				hint: 'Polls are typically used in group chats: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
-				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
+				placeholder: '+15551234567, +15559876543',
+				description: 'The recipients to send the poll to. Multiple → group.',
+				displayOptions: { show: { resource: ['poll'] } },
 			},
 			{
-				displayName: 'Poll Question / Title',
+				displayName: 'Title',
 				name: 'pollTitle',
 				type: 'string',
+				required: true,
 				default: '',
-				placeholder: 'Where should we eat tonight?',
-				description: 'The question or title displayed at the top of the poll',
+				placeholder: 'Where should we eat?',
 				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
 			},
 			{
@@ -725,87 +515,35 @@ export class PhotonIMessage implements INodeType {
 				type: 'fixedCollection',
 				typeOptions: { multipleValues: true, sortable: true },
 				required: true,
-				default: { optionValues: [{ option: '' }, { option: '' }] },
+				default: { values: [{ option: '' }, { option: '' }] },
 				placeholder: 'Add Option',
-				description: 'The choices voters can pick from (minimum 2)',
 				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
 				options: [
 					{
 						displayName: 'Option',
-						name: 'optionValues',
+						name: 'values',
 						values: [
 							{
 								displayName: 'Option Text',
 								name: 'option',
 								type: 'string',
 								default: '',
-								placeholder: 'e.g. Pizza',
 							},
 						],
 					},
 				],
 			},
-			// --- Vote / Unvote fields ---
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'Send From Phone',
+				name: 'pollFromPhone',
 				type: 'string',
-				required: true,
 				default: '',
-				placeholder: 'e.g. iMessage;+;chat123456',
-				description: 'The unique chat identifier containing the poll',
-				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
-			},
-			{
-				displayName: 'Poll Message GUID',
-				name: 'pollMessageGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				description: 'The GUID of the poll message. Found in the output of "Create Poll" or "Get Messages".',
-				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
-			},
-			{
-				displayName: 'Option Identifier',
-				name: 'optionIdentifier',
-				type: 'string',
-				required: true,
-				default: '',
-				description: 'The UUID of the poll option to vote on. Found in the poll message data.',
-				displayOptions: { show: { resource: ['poll'], operation: ['vote', 'unvote'] } },
-			},
-			// --- Add Option fields ---
-			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. iMessage;+;chat123456',
-				description: 'The unique chat identifier containing the poll',
-				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
-			},
-			{
-				displayName: 'Poll Message GUID',
-				name: 'pollMessageGuid',
-				type: 'string',
-				required: true,
-				default: '',
-				description: 'The GUID of the poll message. Found in the output of "Create Poll" or "Get Messages".',
-				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
-			},
-			{
-				displayName: 'Option Text',
-				name: 'optionText',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'e.g. Sushi',
-				description: 'Text for the new poll option to add',
-				displayOptions: { show: { resource: ['poll'], operation: ['addOption'] } },
+				displayOptions: { show: { resource: ['poll'], operation: ['createPoll'] } },
 			},
 
-			// ====== CONTACT operations ======
+			// =====================================================================
+			// CONTACT
+			// =====================================================================
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -813,45 +551,85 @@ export class PhotonIMessage implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['contact'] } },
 				options: [
-					{ name: 'Share Contact Card', value: 'shareContactCard', action: 'Share your contact card', description: 'Share your Name and Photo contact card in a chat' },
+					{ name: 'Share Contact Card', value: 'shareContact', action: 'Share a contact card' },
 				],
-				default: 'shareContactCard',
+				default: 'shareContact',
 			},
-			// --- Share Contact Card fields ---
 			{
-				displayName: 'Chat GUID',
-				name: 'chatGuid',
+				displayName: 'Recipients',
+				name: 'contactRecipients',
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: 'e.g. iMessage;-;+1234567890',
-				hint: 'DM: iMessage;-;+phone or iMessage;-;email — Group: iMessage;+;chat123456',
-				description: 'The unique chat identifier. Use the "List Chats" operation to find this value.',
-				displayOptions: { show: { resource: ['contact'], operation: ['shareContactCard'] } },
+				placeholder: '+15551234567',
+				displayOptions: { show: { resource: ['contact'] } },
 			},
-
-			// ====== HANDLE operations ======
 			{
-				displayName: 'Operation',
-				name: 'operation',
+				displayName: 'Source',
+				name: 'contactSource',
 				type: 'options',
-				noDataExpression: true,
-				displayOptions: { show: { resource: ['handle'] } },
 				options: [
-					{ name: 'Check iMessage Availability', value: 'checkAvailability', action: 'Check i message availability', description: 'Check if a phone number or email can receive iMessages' },
+					{ name: 'Structured Fields', value: 'structured' },
+					{ name: 'vCard String', value: 'vcard' },
 				],
-				default: 'checkAvailability',
+				default: 'structured',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'] } },
 			},
-			// --- Check Availability fields ---
 			{
-				displayName: 'Phone or Email',
-				name: 'address',
+				displayName: 'vCard',
+				name: 'vcard',
 				type: 'string',
-				required: true,
+				typeOptions: { rows: 6 },
 				default: '',
-				placeholder: '+1234567890 or user@example.com',
-				description: 'The phone number (with country code) or email address to check for iMessage support',
-				displayOptions: { show: { resource: ['handle'], operation: ['checkAvailability'] } },
+				placeholder: 'BEGIN:VCARD…',
+				required: true,
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'], contactSource: ['vcard'] } },
+			},
+			{
+				displayName: 'First Name',
+				name: 'contactFirst',
+				type: 'string',
+				default: '',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'], contactSource: ['structured'] } },
+			},
+			{
+				displayName: 'Last Name',
+				name: 'contactLast',
+				type: 'string',
+				default: '',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'], contactSource: ['structured'] } },
+			},
+			{
+				displayName: 'Phones',
+				name: 'contactPhones',
+				type: 'string',
+				default: '',
+				placeholder: '+15551234567, +15559876543',
+				description: 'Comma-separated phone numbers',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'], contactSource: ['structured'] } },
+			},
+			{
+				displayName: 'Emails',
+				name: 'contactEmails',
+				type: 'string',
+				default: '',
+				placeholder: 'alice@example.com',
+				description: 'Comma-separated email addresses',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'], contactSource: ['structured'] } },
+			},
+			{
+				displayName: 'Organization',
+				name: 'contactOrg',
+				type: 'string',
+				default: '',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'], contactSource: ['structured'] } },
+			},
+			{
+				displayName: 'Send From Phone',
+				name: 'contactFromPhone',
+				type: 'string',
+				default: '',
+				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'] } },
 			},
 		],
 	};
@@ -859,577 +637,378 @@ export class PhotonIMessage implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
+
+		const credentials = await getSpectrumCredentials(this);
 		const resource = this.getNodeParameter('resource', 0) as string;
 		const operation = this.getNodeParameter('operation', 0) as string;
-		const credentials = await this.getCredentials('photonIMessageApi');
-		const baseUrl = (credentials.serverUrl as string).replace(/\/+$/, '');
 
-		const normalizeChatGuid = (guid: string): string[] => {
-			const parts = guid.split(';');
-			if (parts.length === 3) {
-				const addr = parts[2];
-				const sep = parts[1];
-				return [`iMessage;${sep};${addr}`, `any;${sep};${addr}`];
-			}
-			return [guid];
-		};
-
-		const enforceInboundFirstPolicy = async (chatGuid: string, itemIndex: number) => {
-			const guids = normalizeChatGuid(chatGuid);
-			const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
-			const guidArgs: Record<string, string> = {};
-			guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
-
-			const checkResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-				method: 'POST' as IHttpRequestMethods,
-				url: `${baseUrl}/api/v1/message/query`,
-				body: {
-					where: [
-						{ statement: `chat.guid IN (${guidPlaceholders})`, args: guidArgs },
-						{ statement: 'message.is_from_me = :fromMe', args: { fromMe: 0 } },
-					],
-					limit: 1,
-					sort: 'DESC',
-				},
-				json: true,
-			});
-
-			const inboundMessages = (checkResponse as { data?: unknown[] }).data;
-			if (!Array.isArray(inboundMessages) || inboundMessages.length === 0) {
-				throw new NodeOperationError(
-					this.getNode(),
-					'Inbound-first policy: this contact has not messaged your number yet. To prevent spam, messages can only be sent to contacts who have initiated a conversation first.',
-					{ itemIndex },
-				);
-			}
-		};
-
-		for (let i = 0; i < items.length; i++) {
-			try {
-				let responseData: unknown;
-
-				// ===== MESSAGE =====
-				if (resource === 'message') {
-				if (operation === 'sendMessage') {
-					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-					await enforceInboundFirstPolicy(chatGuid, i);
-					const message = this.getNodeParameter('message', i) as string;
-					const additionalFields = this.getNodeParameter('additionalFields', i) as {
-							method?: string;
-							subject?: string;
-							effectId?: string;
-							selectedMessageGuid?: string;
-						};
-
-						const body: Record<string, unknown> = {
-							chatGuid,
-							message,
-							tempGuid: generateTempGuid(),
-							method: additionalFields.method || 'private-api',
-						};
-						if (additionalFields.subject) body.subject = additionalFields.subject;
-						if (additionalFields.effectId) body.effectId = additionalFields.effectId;
-						if (additionalFields.selectedMessageGuid) body.selectedMessageGuid = additionalFields.selectedMessageGuid;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/text`,
-							body,
-							json: true,
+		await withSpectrum(credentials, async (session) => {
+			for (let i = 0; i < items.length; i++) {
+				try {
+					const result = await runOne(this, credentials, session, resource, operation, i);
+					returnData.push({ json: result as IDataObject, pairedItem: { item: i } });
+				} catch (error) {
+					if (this.continueOnFail()) {
+						returnData.push({
+							json: { error: (error as Error).message },
+							pairedItem: { item: i },
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-				} else if (operation === 'sendAttachment') {
-					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-					await enforceInboundFirstPolicy(chatGuid, i);
-					const filePath = this.getNodeParameter('filePath', i) as string;
-						const additionalFields = this.getNodeParameter('attachmentAdditionalFields', i) as {
-							fileName?: string;
-							isAudioMessage?: boolean;
-						};
-
-						const body: Record<string, unknown> = {
-							chatGuid,
-							filePath,
-						};
-						if (additionalFields.fileName) body.name = additionalFields.fileName;
-						if (additionalFields.isAudioMessage) body.isAudioMessage = additionalFields.isAudioMessage;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/attachment`,
-							body,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'unsendMessage') {
-						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
-						const unsendFields = this.getNodeParameter('unsendAdditionalFields', i, {}) as {
-							unsendPartIndex?: number;
-						};
-						const partIndex = unsendFields.unsendPartIndex ?? 0;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/${encodeURIComponent(messageGuid)}/unsend`,
-							body: { partIndex },
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'editMessage') {
-						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
-						const editedMessage = this.getNodeParameter('editedMessage', i) as string;
-						const editFields = this.getNodeParameter('editAdditionalFields', i, {}) as {
-							editPartIndex?: number;
-						};
-						const partIndex = editFields.editPartIndex ?? 0;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/${encodeURIComponent(messageGuid)}/edit`,
-							body: {
-								editedMessage,
-								backwardsCompatibilityMessage: editedMessage,
-								partIndex,
-							},
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'downloadAttachment') {
-						const attachmentGuid = this.getNodeParameter('attachmentGuid', i) as string;
-						const additionalFields = this.getNodeParameter('downloadAdditionalFields', i) as {
-							width?: number;
-							height?: number;
-							quality?: number;
-						};
-
-						const qs: IDataObject = {};
-						if (additionalFields.width) qs.width = additionalFields.width;
-						if (additionalFields.height) qs.height = additionalFields.height;
-						if (additionalFields.quality) qs.quality = additionalFields.quality;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'GET' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/attachment/${encodeURIComponent(attachmentGuid)}/download`,
-							qs,
-							json: true,
-							encoding: 'arraybuffer',
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'reactToMessage') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
-						const reaction = this.getNodeParameter('reaction', i) as string;
-						const reactFields = this.getNodeParameter('reactAdditionalFields', i, {}) as {
-							partIndex?: number;
-						};
-						const partIndex = reactFields.partIndex ?? 0;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/react`,
-							body: {
-								chatGuid,
-								selectedMessageGuid: messageGuid,
-								reaction,
-								partIndex,
-							},
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'searchMessages') {
-						const query = this.getNodeParameter('query', i) as string;
-						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
-						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
-						const additionalFields = this.getNodeParameter('searchAdditionalFields', i) as {
-							chatGuid?: string;
-							sort?: string;
-						};
-
-						const where: Array<{ statement: string; args: Record<string, unknown> }> = [
-							{
-								statement: 'message.text LIKE :text',
-								args: { text: `%${query}%` },
-							},
-						];
-						if (additionalFields.chatGuid) {
-							const guids = normalizeChatGuid(additionalFields.chatGuid);
-							const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
-							const guidArgs: Record<string, string> = {};
-							guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
-							where.push({ statement: `chat.guid IN (${guidPlaceholders})`, args: guidArgs });
-						}
-
-						const body: Record<string, unknown> = {
-							where,
-							limit,
-							sort: additionalFields.sort ?? 'DESC',
-						};
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/query`,
-							body,
-							json: true,
-						});
-
-						const messages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
-						if (Array.isArray(messages)) {
-							for (const msg of messages) {
-							returnData.push({
-								json: msg as IDataObject,
-								pairedItem: { item: i },
-							});
-						}
 						continue;
 					}
-					responseData = messages;
-
-				} else if (operation === 'getMessages') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
-						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
-						const additionalFields = this.getNodeParameter('getMessagesAdditionalFields', i) as {
-							after?: string;
-							before?: string;
-							sort?: string;
-						};
-
-						const guids = normalizeChatGuid(chatGuid);
-						const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
-						const guidArgs: Record<string, string> = {};
-						guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
-
-						const where: Array<{ statement: string; args: Record<string, unknown> }> = [
-							{
-								statement: `chat.guid IN (${guidPlaceholders})`,
-								args: guidArgs,
-							},
-						];
-						if (additionalFields.after) {
-							const afterTime = new Date(additionalFields.after as string).getTime();
-							if (!Number.isNaN(afterTime)) {
-								where.push({ statement: 'message.date > :after', args: { after: afterTime } });
-							}
-						}
-						if (additionalFields.before) {
-							const beforeTime = new Date(additionalFields.before as string).getTime();
-							if (!Number.isNaN(beforeTime)) {
-								where.push({ statement: 'message.date < :before', args: { before: beforeTime } });
-							}
-						}
-
-						const body: Record<string, unknown> = {
-							where,
-							limit,
-							sort: additionalFields.sort ?? 'DESC',
-							with: ['chat', 'handle', 'attachment'],
-						};
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/query`,
-							body,
-							json: true,
-						});
-
-						const messages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
-						if (Array.isArray(messages)) {
-							for (const msg of messages) {
-							returnData.push({
-								json: msg as IDataObject,
-								pairedItem: { item: i },
-							});
-						}
-						continue;
-					}
-					responseData = messages;
+					if (error instanceof NodeOperationError) throw error;
+					throw new NodeApiError(this.getNode(), error as JsonObject);
 				}
-
-			// ===== CHAT =====
-				} else if (resource === 'chat') {
-					if (operation === 'listChats') {
-						const returnAll = this.getNodeParameter('returnAll', i, false) as boolean;
-						const limit = returnAll ? 1000 : (this.getNodeParameter('limit', i, 50) as number);
-						const additionalFields = this.getNodeParameter('listChatsAdditionalFields', i) as {
-							withLastMessage?: boolean;
-						};
-
-						const withRelations = ['participants'];
-						if (additionalFields.withLastMessage !== false) {
-							withRelations.push('lastMessage');
-						}
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/query`,
-							body: {
-								limit,
-								with: withRelations,
-							},
-							json: true,
-						});
-
-						const chats = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
-						if (Array.isArray(chats)) {
-							for (const chat of chats) {
-								const participants = chat.participants as Array<Record<string, unknown>> | undefined;
-								const isGroup = (chat.style as number) === 43;
-								const participantAddresses = participants?.map((p) => p.address as string) ?? [];
-
-							returnData.push({
-								json: {
-									...chat as IDataObject,
-									displayName: (chat.displayName as string) || (isGroup ? 'Group Chat' : participantAddresses[0] ?? ''),
-									isGroup,
-									participantAddresses,
-									participantCount: participantAddresses.length,
-								},
-								pairedItem: { item: i },
-							});
-							}
-							continue;
-						}
-						responseData = chats;
-
-					} else if (operation === 'createChat') {
-						const phoneNumbers = this.getNodeParameter('phoneNumbers', i) as string;
-						const additionalFields = this.getNodeParameter('createChatAdditionalFields', i) as {
-							message?: string;
-							service?: string;
-						};
-
-						const body: Record<string, unknown> = {
-							addresses: phoneNumbers.split(',').map((s) => s.trim()),
-							service: additionalFields.service || 'iMessage',
-							method: 'private-api',
-						};
-						if (additionalFields.message) body.message = additionalFields.message;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/new`,
-							body,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'markChatRead') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/read`,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'startTyping') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-
-						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/typing`,
-							json: true,
-						});
-						responseData = { typing: true, chatGuid };
-
-					} else if (operation === 'stopTyping') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-
-						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'DELETE' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/typing`,
-							json: true,
-						});
-						responseData = { typing: false, chatGuid };
-					}
-
-				// ===== SCHEDULED MESSAGE =====
-				} else if (resource === 'scheduledMessage') {
-				if (operation === 'createScheduledMessage') {
-					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-					await enforceInboundFirstPolicy(chatGuid, i);
-					const message = this.getNodeParameter('message', i) as string;
-						const sendAt = this.getNodeParameter('sendAt', i) as string;
-						const scheduleType = this.getNodeParameter('scheduleType', i) as string;
-
-						const schedule: Record<string, unknown> = { type: scheduleType };
-						if (scheduleType !== 'once') {
-							schedule.type = 'recurring';
-							schedule.intervalType = scheduleType;
-							schedule.interval = 1;
-						}
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/schedule`,
-							body: {
-								type: 'send-message',
-								payload: {
-									chatGuid,
-									message,
-									method: 'private-api',
-								},
-								scheduledFor: new Date(sendAt).getTime(),
-								schedule,
-							},
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'listScheduledMessages') {
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'GET' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/schedule`,
-							json: true,
-						});
-
-						const schedules = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
-						if (Array.isArray(schedules)) {
-							for (const sched of schedules) {
-							returnData.push({
-								json: sched as IDataObject,
-								pairedItem: { item: i },
-							});
-							}
-							continue;
-						}
-						responseData = schedules;
-
-					} else if (operation === 'deleteScheduledMessage') {
-						const scheduledMessageId = this.getNodeParameter('scheduledMessageId', i) as string;
-
-						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'DELETE' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/schedule/${encodeURIComponent(scheduledMessageId)}`,
-							json: true,
-						});
-						responseData = { deleted: true };
-					}
-
-				// ===== POLL =====
-				} else if (resource === 'poll') {
-					if (operation === 'createPoll') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const pollTitle = this.getNodeParameter('pollTitle', i, '') as string;
-						const pollOptionsData = this.getNodeParameter('pollOptions', i) as {
-							optionValues?: Array<{ option: string }>;
-						};
-						const options = (pollOptionsData.optionValues ?? [])
-							.map((o) => o.option.trim())
-							.filter(Boolean);
-
-						const body: Record<string, unknown> = {
-							chatGuid,
-							options,
-						};
-						if (pollTitle) body.title = pollTitle;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/create`,
-							body,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'vote') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
-						const optionIdentifier = this.getNodeParameter('optionIdentifier', i) as string;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/vote`,
-							body: { chatGuid, pollMessageGuid, optionIdentifier },
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'unvote') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
-						const optionIdentifier = this.getNodeParameter('optionIdentifier', i) as string;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/unvote`,
-							body: { chatGuid, pollMessageGuid, optionIdentifier },
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-
-					} else if (operation === 'addOption') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
-						const optionText = this.getNodeParameter('optionText', i) as string;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/add-option`,
-							body: { chatGuid, pollMessageGuid, optionText },
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-					}
-
-				// ===== CONTACT =====
-				} else if (resource === 'contact') {
-					if (operation === 'shareContactCard') {
-						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/contact/share`,
-							body: { chatGuid },
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
-					}
-
-				// ===== HANDLE =====
-				} else if (resource === 'handle') {
-					if (operation === 'checkAvailability') {
-						const address = this.getNodeParameter('address', i) as string;
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'GET' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/handle/availability/imessage`,
-							qs: { address },
-							json: true,
-						});
-						const availData = response as IDataObject;
-						responseData = {
-							address,
-							available: !!availData.data,
-						};
-					}
-				}
-
-			if (responseData !== undefined) {
-				returnData.push({
-					json: responseData as IDataObject,
-					pairedItem: { item: i },
-				});
-				}
-			} catch (error) {
-			if (this.continueOnFail()) {
-				returnData.push({
-					json: { error: (error as Error).message },
-					pairedItem: { item: i },
-				});
-					continue;
-				}
-				throw new NodeApiError(this.getNode(), error as JsonObject);
 			}
-		}
+		});
 
 		return [returnData];
 	}
 }
+
+async function runOne(
+	ctx: IExecuteFunctions,
+	credentials: SpectrumCredentials,
+	session: SpectrumSession,
+	resource: string,
+	operation: string,
+	i: number,
+): Promise<unknown> {
+	const { app, imessage, effect: effectBuilder, background: backgroundBuilder, sp } = session;
+	const im = imessage(app);
+
+	if (resource === 'message') {
+		if (operation === 'sendMessage') {
+			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
+			const text = ctx.getNodeParameter('text', i) as string;
+			const opts = ctx.getNodeParameter('sendMessageOptions', i, {}) as {
+				effect?: IMessageEffect;
+				fromPhone?: string;
+			};
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+
+			const space = await resolveSpace(im, recipients, opts.fromPhone);
+			const effectValue = opts.effect
+				? resolveEffect(imessage, opts.effect)
+				: undefined;
+
+			let content: unknown = sp.text(text);
+			if (effectValue) {
+				content = effectBuilder(content, effectValue);
+			}
+			const result = await space.send(content as Parameters<typeof space.send>[0]);
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				phone: (space as { phone?: string }).phone,
+				type: (space as { type?: string }).type,
+			};
+		}
+
+		if (operation === 'sendAttachment' || operation === 'sendVoice') {
+			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
+			const source = ctx.getNodeParameter('attachmentSource', i) as 'path' | 'binary';
+			const opts = ctx.getNodeParameter('attachmentOptions', i, {}) as {
+				fileName?: string;
+				mimeType?: string;
+				duration?: number;
+				fromPhone?: string;
+			};
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+			const space = await resolveSpace(im, recipients, opts.fromPhone);
+
+			const builder = operation === 'sendVoice' ? sp.voice : sp.attachment;
+
+			let content: unknown;
+			if (source === 'path') {
+				const filePath = ctx.getNodeParameter('filePath', i) as string;
+				const meta: Record<string, unknown> = {};
+				if (opts.fileName) meta.name = opts.fileName;
+				if (opts.mimeType) meta.mimeType = opts.mimeType;
+				if (operation === 'sendVoice' && opts.duration) meta.duration = opts.duration;
+				content = Object.keys(meta).length > 0
+					? (builder as (p: string, m: unknown) => unknown)(filePath, meta)
+					: (builder as (p: string) => unknown)(filePath);
+			} else {
+				const property = ctx.getNodeParameter('binaryProperty', i) as string;
+				const binary = await ctx.helpers.getBinaryDataBuffer(i, property);
+				const binaryMeta = ctx.helpers.assertBinaryData(i, property);
+				const meta: Record<string, unknown> = {
+					name: opts.fileName || binaryMeta.fileName || 'file',
+					mimeType: opts.mimeType || binaryMeta.mimeType,
+				};
+				if (operation === 'sendVoice' && opts.duration) meta.duration = opts.duration;
+				content = (builder as (b: Buffer, m: unknown) => unknown)(binary, meta);
+			}
+
+			const result = await space.send(content as Parameters<typeof space.send>[0]);
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				phone: (space as { phone?: string }).phone,
+			};
+		}
+
+		if (operation === 'sendRichLink') {
+			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
+			const url = ctx.getNodeParameter('url', i) as string;
+			const opts = ctx.getNodeParameter('richLinkOptions', i, {}) as { fromPhone?: string };
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+			const space = await resolveSpace(im, recipients, opts.fromPhone);
+			const result = await space.send(sp.richlink(url) as Parameters<typeof space.send>[0]);
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+			};
+		}
+
+		if (operation === 'sendGroup') {
+			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
+			const itemsRaw = ctx.getNodeParameter('groupItems', i) as {
+				items?: Array<{ kind: string; value: string }>;
+			};
+			const opts = ctx.getNodeParameter('groupOptions', i, {}) as { fromPhone?: string };
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+			const space = await resolveSpace(im, recipients, opts.fromPhone);
+
+			const builtItems: unknown[] = [];
+			for (const entry of itemsRaw.items ?? []) {
+				if (entry.kind === 'text') {
+					builtItems.push(sp.text(entry.value));
+				} else if (entry.kind === 'attachmentPath') {
+					builtItems.push(sp.attachment(entry.value));
+				} else if (entry.kind === 'attachmentBinary') {
+					const binary = await ctx.helpers.getBinaryDataBuffer(i, entry.value);
+					const binaryMeta = ctx.helpers.assertBinaryData(i, entry.value);
+					builtItems.push(
+						sp.attachment(binary, {
+							name: binaryMeta.fileName || 'file',
+							mimeType: binaryMeta.mimeType,
+						}),
+					);
+				}
+			}
+			if (builtItems.length === 0) {
+				throw new NodeOperationError(ctx.getNode(), 'Group requires at least one item', {
+					itemIndex: i,
+				});
+			}
+			const groupContent = (sp.group as (...args: unknown[]) => unknown)(...builtItems);
+			const result = await space.send(groupContent as Parameters<typeof space.send>[0]);
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				itemCount: builtItems.length,
+			};
+		}
+
+		if (operation === 'replyToMessage') {
+			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
+			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
+			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
+			const replyText = ctx.getNodeParameter('replyText', i) as string;
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+			const space = await resolveSpace(im, recipients, fromPhone);
+			const target = (await space.getMessage(targetId)) as Parameters<typeof sp.reply>[1];
+			const result = await space.send(
+				sp.reply(sp.text(replyText), target) as Parameters<typeof space.send>[0],
+			);
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+			};
+		}
+
+		if (operation === 'editMessage') {
+			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
+			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
+			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
+			const newText = ctx.getNodeParameter('editText', i) as string;
+			const recipients = splitAddresses(recipientsRaw);
+			// Editing your own outbound messages doesn't trigger inbound-first.
+			const space = await resolveSpace(im, recipients, fromPhone);
+			const target = (await space.getMessage(targetId)) as Parameters<typeof sp.edit>[1];
+			await space.send(
+				sp.edit(sp.text(newText), target) as Parameters<typeof space.send>[0],
+			);
+			return { spaceId: space.id, editedId: targetId };
+		}
+
+		if (operation === 'reactToMessage') {
+			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
+			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
+			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
+			const reaction = ctx.getNodeParameter('reaction', i) as Tapback;
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+			const space = await resolveSpace(im, recipients, fromPhone);
+			const target = await space.getMessage(targetId);
+			await target.react(reaction);
+			return { spaceId: space.id, targetId, reaction };
+		}
+	}
+
+	if (resource === 'space') {
+		const recipientsRaw = ctx.getNodeParameter('spaceRecipients', i) as string;
+		const fromPhone = ctx.getNodeParameter('spaceFromPhone', i, '') as string;
+		const recipients = splitAddresses(recipientsRaw);
+
+		if (operation === 'createSpace') {
+			// Resolving a space is read-only; inbound-first only gates outbound.
+			const space = await resolveSpace(im, recipients, fromPhone);
+			return {
+				spaceId: space.id,
+				phone: (space as { phone?: string }).phone,
+				type: (space as { type?: string }).type,
+				recipients,
+			};
+		}
+
+		enforceInboundFirst(ctx, credentials, recipients, i);
+		const space = await resolveSpace(im, recipients, fromPhone);
+
+		if (operation === 'startTyping') {
+			await space.startTyping();
+			return { spaceId: space.id, typing: true };
+		}
+		if (operation === 'stopTyping') {
+			await space.stopTyping();
+			return { spaceId: space.id, typing: false };
+		}
+		if (operation === 'setBackground') {
+			const source = ctx.getNodeParameter('backgroundSource', i) as
+				| 'path'
+				| 'binary'
+				| 'clear';
+			if (source === 'clear') {
+				await space.send(backgroundBuilder('clear') as Parameters<typeof space.send>[0]);
+				return { spaceId: space.id, background: 'clear' };
+			}
+			if (source === 'path') {
+				const path = ctx.getNodeParameter('backgroundPath', i) as string;
+				await space.send(backgroundBuilder(path) as Parameters<typeof space.send>[0]);
+				return { spaceId: space.id, background: 'set', source: path };
+			}
+			const property = ctx.getNodeParameter('backgroundBinary', i) as string;
+			const mime = ctx.getNodeParameter('backgroundMime', i) as string;
+			const buf = await ctx.helpers.getBinaryDataBuffer(i, property);
+			const binaryMeta = ctx.helpers.assertBinaryData(i, property);
+			await space.send(
+				backgroundBuilder(buf, { mimeType: mime || binaryMeta.mimeType }) as Parameters<typeof space.send>[0],
+			);
+			return { spaceId: space.id, background: 'set', source: 'binary' };
+		}
+	}
+
+	if (resource === 'poll' && operation === 'createPoll') {
+		const recipientsRaw = ctx.getNodeParameter('pollRecipients', i) as string;
+		const title = ctx.getNodeParameter('pollTitle', i) as string;
+		const opts = ctx.getNodeParameter('pollOptions', i) as {
+			values?: Array<{ option: string }>;
+		};
+		const fromPhone = ctx.getNodeParameter('pollFromPhone', i, '') as string;
+		const recipients = splitAddresses(recipientsRaw);
+		enforceInboundFirst(ctx, credentials, recipients, i);
+		const space = await resolveSpace(im, recipients, fromPhone);
+
+		const options = (opts.values ?? [])
+			.map((v) => (v.option ?? '').trim())
+			.filter(Boolean);
+		if (options.length < 2) {
+			throw new NodeOperationError(ctx.getNode(), 'Polls require at least 2 options', {
+				itemIndex: i,
+			});
+		}
+		const result = await space.send(
+			(sp.poll as (...args: unknown[]) => unknown)(title, ...options) as Parameters<typeof space.send>[0],
+		);
+		return {
+			spaceId: space.id,
+			messageId: (result as { id?: string } | undefined)?.id,
+			title,
+			options,
+		};
+	}
+
+	if (resource === 'contact' && operation === 'shareContact') {
+		const recipientsRaw = ctx.getNodeParameter('contactRecipients', i) as string;
+		const source = ctx.getNodeParameter('contactSource', i) as 'structured' | 'vcard';
+		const fromPhone = ctx.getNodeParameter('contactFromPhone', i, '') as string;
+		const recipients = splitAddresses(recipientsRaw);
+		enforceInboundFirst(ctx, credentials, recipients, i);
+		const space = await resolveSpace(im, recipients, fromPhone);
+
+		let contactContent: unknown;
+		if (source === 'vcard') {
+			const vcard = ctx.getNodeParameter('vcard', i) as string;
+			contactContent = sp.contact(vcard);
+		} else {
+			const first = ctx.getNodeParameter('contactFirst', i, '') as string;
+			const last = ctx.getNodeParameter('contactLast', i, '') as string;
+			const phones = (ctx.getNodeParameter('contactPhones', i, '') as string)
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean)
+				.map((value) => ({ value }));
+			const emails = (ctx.getNodeParameter('contactEmails', i, '') as string)
+				.split(',')
+				.map((s) => s.trim())
+				.filter(Boolean)
+				.map((value) => ({ value }));
+			const orgName = ctx.getNodeParameter('contactOrg', i, '') as string;
+			const input: Record<string, unknown> = {
+				name: { first: first || undefined, last: last || undefined },
+			};
+			if (phones.length > 0) input.phones = phones;
+			if (emails.length > 0) input.emails = emails;
+			if (orgName) input.org = { name: orgName };
+			contactContent = (sp.contact as (input: unknown) => unknown)(input);
+		}
+		const result = await space.send(contactContent as Parameters<typeof space.send>[0]);
+		return {
+			spaceId: space.id,
+			messageId: (result as { id?: string } | undefined)?.id,
+		};
+	}
+
+	throw new NodeOperationError(
+		ctx.getNode(),
+		`Unsupported resource/operation: ${resource}/${operation}`,
+		{ itemIndex: i },
+	);
+}
+
+interface ResolvedSpace {
+	id: string;
+	phone?: string;
+	type?: string;
+	send: (content: unknown) => Promise<{ id?: string } | undefined>;
+	startTyping: () => Promise<void>;
+	stopTyping: () => Promise<void>;
+	getMessage: (id: string) => Promise<{
+		id: string;
+		react: (emoji: string) => Promise<void>;
+	}>;
+}
+
+async function resolveSpace(
+	im: {
+		user: (id: string) => Promise<{ id: string }>;
+		space: (...args: unknown[]) => Promise<unknown>;
+	},
+	recipients: string[],
+	fromPhone?: string,
+): Promise<ResolvedSpace> {
+	if (recipients.length === 0) {
+		throw new ApplicationError('At least one recipient is required');
+	}
+	const users = await Promise.all(recipients.map((r) => im.user(r)));
+	const args: unknown[] = [...users];
+	if (fromPhone) args.push({ phone: fromPhone });
+	return (await im.space(...args)) as ResolvedSpace;
+}
+
