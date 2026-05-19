@@ -125,8 +125,10 @@ Output for `event: messages`:
 | `messageId` | `string` — stable, dedup-safe |
 | `webhookId` | `string` — from `X-Spectrum-Webhook-Id` |
 | `platform` | `"iMessage"` |
+| `direction` | `"inbound"` |
 | `spaceId` | `string` |
 | `sender` | `string` (E.164 phone or email) |
+| `senderPlatform` | `string` — platform the sender belongs to |
 | `timestamp` | ISO 8601 |
 | `contentType` | `"text" \| "attachment" \| "voice" \| "reaction" \| ...` |
 | `text` | present for text |
@@ -147,6 +149,16 @@ Bypass paths:
 
 - **Pre-Approved Recipients** field on the credential — comma-separated phones/emails that skip the check (useful for bootstrapping existing contacts).
 - Set **Inbound-First Policy** to `Off` (not recommended — Apple may flag the line).
+
+## Deep links
+
+For "tap to message" CTAs on a landing page or email, Spectrum exposes a public deep-link redirect that hands the user off to Messages with a draft already populated:
+
+```
+https://spectrum.photon.codes/users/{userId}/redirect?msg=Hi%20there
+```
+
+It returns `302` with a `sms:` URL targeted at the user's assigned line, so the receiving phone opens straight into the conversation. Useful outside n8n — not an operation on the node itself.
 
 ## Resources
 

@@ -84,7 +84,7 @@ export async function deleteWebhook(
 			ctx,
 			creds,
 			'DELETE',
-			`/projects/${creds.projectId}/webhooks/${encodeURIComponent(webhookId)}`,
+			`/projects/${creds.projectId}/webhooks/${encodeURIComponent(webhookId)}/`,
 		);
 	} catch (err) {
 		// 404 is fine — webhook already gone.
