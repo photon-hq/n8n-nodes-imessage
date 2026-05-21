@@ -410,19 +410,6 @@ export class PhotonSpectrumApi implements ICredentialType {
 			},
 		},
 		{
-			displayName: 'Pre-approved recipients (optional)',
-			name: 'preApproved',
-			type: 'string',
-			default: '',
-			placeholder: '+15551234567, alice@example.com',
-			description:
-				'Phones or emails you may message before they text you first. Others unlock automatically after they message you.',
-			displayOptions: {
-				show: { projectId: [{ _cnd: { not: '' } }] },
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
-			},
-		},
-		{
 			displayName: 'Show technical details',
 			name: 'showTechnicalDetails',
 			type: 'boolean',

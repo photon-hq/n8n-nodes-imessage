@@ -9,7 +9,6 @@ import type {
 import { NodeConnectionTypes } from 'n8n-workflow';
 
 import { getSpectrumCredentials } from './lib/credentials';
-import { recordInbound } from './lib/inboundFirst';
 import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks, registerWebhook } from './lib/webhookApi';
 import type { WebhookRegistration } from './lib/types';
@@ -338,10 +337,6 @@ export class PhotonIMessageTrigger implements INodeType {
 		const spaceId = payload.message?.space?.id ?? payload.space?.id ?? '';
 		const content = payload.message?.content ?? {};
 		const rawContentType = payload.message?.content?.type ?? '';
-
-		if (senderAddress) {
-			recordInbound(this, senderAddress);
-		}
 
 		const contentTypes = this.getNodeParameter('contentTypes', []) as string[];
 		if (

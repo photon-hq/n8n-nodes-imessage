@@ -2,13 +2,6 @@ export interface SpectrumCredentials {
 	projectId: string;
 	projectSecret: string;
 	apiHost: string;
-	preApproved: string;
-}
-
-export interface AllowlistEntry {
-	address: string;
-	firstSeen: number;
-	lastSeen: number;
 }
 
 export interface WebhookRegistration {

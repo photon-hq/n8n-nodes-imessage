@@ -36,6 +36,5 @@ export async function getSpectrumCredentials(
 		projectId,
 		projectSecret,
 		apiHost,
-		preApproved: (raw.preApproved as string) || '',
 	};
 }

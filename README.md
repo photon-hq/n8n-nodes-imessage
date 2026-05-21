@@ -10,7 +10,7 @@ n8n community node for **iMessage by Photon**, built on [Spectrum](https://githu
 - **Action node — `iMessage by Photon`**: text, attachments, voice notes, rich links, group albums, reactions (built-in tapbacks **or any custom emoji**), threaded replies (text and/or attachment), edits, contact cards, polls, chat backgrounds, screen/bubble effects, message lookup, custom platform payloads, user resolution, and a typing-wrapped "send with typing indicator" helper.
 - **Trigger node — `iMessage by Photon Trigger`**: real-time inbound events via Spectrum-managed webhooks with HMAC-SHA256 verification. Webhook registration and tear-down happen automatically when you activate / deactivate the workflow.
 - **Full `spectrum-ts` outbound stack** (no proprietary HTTP shims) inlined into the published artifact — n8n installs zero extra runtime dependencies.
-- **Inbound-first policy** on by default, gating outbound to contacts who have written to your project at least once, matching Photon's [iMessage deliverability guidance](https://docs.photon.codes/best-practices/imessage-deliverability).
+- **Deliverability error logging** when Spectrum rejects outbound — execution logs show the rejection reason with a link to Photon's [iMessage deliverability guidance](https://docs.photon.codes/best-practices/imessage-deliverability).
 
 ## Prerequisites
 
@@ -59,7 +59,6 @@ Paste the printed credentials under **Troubleshooting**. Flags: `--api-host`, `-
 |---|---|
 | Your iMessage Line | Number people text to trigger workflows. |
 | Your Mobile (E.164) | Shared plans — assign or refresh your line, then Retry. |
-| Pre-Approved Recipients | Optional outbound allowlist before first inbound. |
 | Show Technical Details | Reveals Project ID for dashboard support. |
 
 ## Action node
@@ -154,16 +153,6 @@ Output for `event: messages`:
 | `group` | `{ itemCount }` for grouped bundles |
 | `custom` | Raw provider-defined payload |
 | `raw` | Full Spectrum payload (always present for debugging) |
-
-Every inbound sender is also written into a shared allowlist that the action node reads to enforce the inbound-first policy — once a contact writes to the project, outbound to that address unlocks automatically.
-
-## Inbound-first policy
-
-Per Photon's [iMessage deliverability docs](https://docs.photon.codes/best-practices/imessage-deliverability), Apple filters iMessage lines on behaviour. Lines that cold-send get flagged; lines that respond to inbound traffic stay healthy. There is no soft-deliverability dial — get this wrong once and the line is burnt.
-
-The node enforces inbound-first unconditionally. Every outbound operation (send, react, reply, attachment, voice, rich link, group, contact, poll, typing, background) requires the recipient to have either messaged your line at least once, or to be on the **Pre-Approved Recipients** allowlist on the credential. Once a contact writes to your line, the trigger node records them automatically and they unlock for outbound forever after.
-
-There is no "off" switch by design — letting it be one would be a foot-gun that ends with a flagged line.
 
 ## Deep links
 

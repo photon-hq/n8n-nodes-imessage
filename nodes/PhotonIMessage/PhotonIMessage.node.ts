@@ -10,7 +10,7 @@ import { ApplicationError, NodeApiError, NodeConnectionTypes, NodeOperationError
 
 import { getSpectrumCredentials } from './lib/credentials';
 import { resolveEffect } from './lib/effects';
-import { enforceInboundFirst } from './lib/inboundFirst';
+import { isDeliverabilityError, throwDeliverabilityError } from './lib/outboundErrors';
 import { withSpectrum, type SpectrumSession } from './lib/spectrumClient';
 import {
 	BUBBLE_EFFECTS,
@@ -820,6 +820,9 @@ export class PhotonIMessage implements INodeType {
 						});
 						continue;
 					}
+					if (isDeliverabilityError(error)) {
+						throwDeliverabilityError(this, error, i);
+					}
 					throw new NodeApiError(this.getNode(), error as JsonObject, {
 						itemIndex: i,
 					});
@@ -851,8 +854,6 @@ async function runOne(
 				fromPhone?: string;
 			};
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
-
 			const space = await resolveSpace(im, recipients, opts.fromPhone);
 			const effectValue = opts.effect
 				? resolveEffect(imessage, opts.effect, ctx.logger)
@@ -881,7 +882,6 @@ async function runOne(
 				fromPhone?: string;
 			};
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, opts.fromPhone);
 
 			const builder = operation === 'sendVoice' ? sp.voice : sp.attachment;
@@ -921,7 +921,6 @@ async function runOne(
 			const url = ctx.getNodeParameter('url', i) as string;
 			const opts = ctx.getNodeParameter('richLinkOptions', i, {}) as { fromPhone?: string };
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, opts.fromPhone);
 			const result = await space.send(sp.richlink(url) as Parameters<typeof space.send>[0]);
 			return {
@@ -937,7 +936,6 @@ async function runOne(
 			};
 			const opts = ctx.getNodeParameter('groupOptions', i, {}) as { fromPhone?: string };
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, opts.fromPhone);
 
 			const builtItems: unknown[] = [];
@@ -983,7 +981,6 @@ async function runOne(
 				attachmentMime?: string;
 			};
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const target = (await space.getMessage(targetId)) as Parameters<typeof sp.reply>[1];
 
@@ -1044,7 +1041,6 @@ async function runOne(
 			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
 			const newText = ctx.getNodeParameter('editText', i) as string;
 			const recipients = splitAddresses(recipientsRaw);
-			// Editing your own outbound messages doesn't trigger inbound-first.
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const target = (await space.getMessage(targetId)) as Parameters<typeof sp.edit>[1];
 			await space.send(
@@ -1068,7 +1064,6 @@ async function runOne(
 				});
 			}
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const target = await space.getMessage(targetId);
 			await target.react(reaction);
@@ -1140,7 +1135,6 @@ async function runOne(
 				}
 			}
 			const recipients = splitAddresses(recipientsRaw);
-			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const customBuilder = sp.custom as (raw: unknown) => unknown;
 			const result = await space.send(
@@ -1159,7 +1153,6 @@ async function runOne(
 		const recipients = splitAddresses(recipientsRaw);
 
 		if (operation === 'createSpace') {
-			// Resolving a space is read-only; inbound-first only gates outbound.
 			const space = await resolveSpace(im, recipients, fromPhone);
 			return {
 				spaceId: space.id,
@@ -1169,7 +1162,6 @@ async function runOne(
 			};
 		}
 
-		enforceInboundFirst(ctx, credentials, recipients, i);
 		const space = await resolveSpace(im, recipients, fromPhone);
 
 		if (operation === 'startTyping') {
@@ -1226,7 +1218,6 @@ async function runOne(
 		};
 		const fromPhone = ctx.getNodeParameter('pollFromPhone', i, '') as string;
 		const recipients = splitAddresses(recipientsRaw);
-		enforceInboundFirst(ctx, credentials, recipients, i);
 		const space = await resolveSpace(im, recipients, fromPhone);
 
 		const options = (opts.values ?? [])
@@ -1253,7 +1244,6 @@ async function runOne(
 		const source = ctx.getNodeParameter('contactSource', i) as 'structured' | 'vcard';
 		const fromPhone = ctx.getNodeParameter('contactFromPhone', i, '') as string;
 		const recipients = splitAddresses(recipientsRaw);
-		enforceInboundFirst(ctx, credentials, recipients, i);
 		const space = await resolveSpace(im, recipients, fromPhone);
 
 		let contactContent: unknown;
