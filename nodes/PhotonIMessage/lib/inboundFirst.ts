@@ -3,6 +3,7 @@ import { NodeOperationError } from 'n8n-workflow';
 import type { AllowlistEntry, SpectrumCredentials } from './types';
 
 const ALLOWLIST_KEY = 'photonSpectrumAllowlist';
+const SEEDED_KEY = 'photonSpectrumSeededAt';
 
 interface AllowlistStore {
 	[address: string]: AllowlistEntry;
@@ -14,6 +15,14 @@ function normalize(address: string): string {
 
 // Cross-execution allowlist of senders. Stored in the workflow's `global`
 // static data so the Trigger and Action nodes share it within a workflow.
+//
+// TOCTOU note: `getWorkflowStaticData('global')` returns a per-execution view
+// that n8n flushes back to storage at execution boundaries. Two executions
+// that overlap may each read a store that doesn't yet contain a sender just
+// recorded by the other — for iMessage this is practically a non-issue
+// (a contact's trigger fires sequentially with its reply), and n8n's
+// architecture provides no cross-execution lock primitive, so we accept the
+// race rather than paper over it with a mechanism that can't be made correct.
 function loadStore(
 	ctx: IExecuteFunctions | IWebhookFunctions,
 ): AllowlistStore {
@@ -25,8 +34,17 @@ function loadStore(
 	return fresh;
 }
 
-function seedPreApproved(store: AllowlistStore, preApproved: string): void {
+// One-time seed of the credential's pre-approved list. Repeating the iteration
+// + writes on every outbound is redundant once we've persisted the entries;
+// guard with a fingerprint of the input string so credential edits re-seed.
+function seedPreApproved(
+	ctx: IExecuteFunctions,
+	store: AllowlistStore,
+	preApproved: string,
+): void {
 	if (!preApproved) return;
+	const staticData = ctx.getWorkflowStaticData('global') as Record<string, unknown>;
+	if (staticData[SEEDED_KEY] === preApproved) return;
 	const now = Date.now();
 	for (const raw of preApproved.split(',')) {
 		const addr = normalize(raw);
@@ -35,6 +53,7 @@ function seedPreApproved(store: AllowlistStore, preApproved: string): void {
 			store[addr] = { address: addr, firstSeen: now, lastSeen: now };
 		}
 	}
+	staticData[SEEDED_KEY] = preApproved;
 }
 
 // Records an inbound sender so subsequent outbound to that address is allowed.
@@ -63,7 +82,7 @@ export function enforceInboundFirst(
 	itemIndex: number,
 ): void {
 	const store = loadStore(ctx);
-	seedPreApproved(store, creds.preApproved ?? '');
+	seedPreApproved(ctx, store, creds.preApproved ?? '');
 
 	const blocked: string[] = [];
 	for (const raw of recipients) {
