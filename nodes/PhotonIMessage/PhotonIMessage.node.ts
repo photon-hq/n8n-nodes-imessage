@@ -855,7 +855,7 @@ async function runOne(
 
 			const space = await resolveSpace(im, recipients, opts.fromPhone);
 			const effectValue = opts.effect
-				? resolveEffect(imessage, opts.effect)
+				? resolveEffect(imessage, opts.effect, ctx.logger)
 				: undefined;
 
 			let content: unknown = sp.text(text);
@@ -1081,16 +1081,33 @@ async function runOne(
 			const messageId = ctx.getNodeParameter('lookupMessageId', i) as string;
 			const recipients = splitAddresses(recipientsRaw);
 			const space = await resolveSpace(im, recipients, fromPhone);
-			const msg = (await space.getMessage(messageId)) as
-				| (Awaited<ReturnType<typeof space.getMessage>> & {
-						id: string;
-						platform?: string;
-						timestamp?: Date;
-						direction?: string;
-						content?: { type?: string; text?: string };
-						sender?: { id: string };
-				  })
-				| undefined;
+			// Spectrum throws on unknown message ids (never returns `undefined`),
+			// so the raw error bubbles out as a `NodeApiError` with the SDK's
+			// internal string. Catch the 404 explicitly to surface a clear,
+			// actionable message that mentions the id the user typed.
+			let msg: (Awaited<ReturnType<typeof space.getMessage>> & {
+				id: string;
+				platform?: string;
+				timestamp?: Date;
+				direction?: string;
+				content?: { type?: string; text?: string };
+				sender?: { id: string };
+			}) | undefined;
+			try {
+				msg = (await space.getMessage(messageId)) as typeof msg;
+			} catch (err) {
+				const status =
+					(err as { httpCode?: number; statusCode?: number }).httpCode ??
+					(err as { statusCode?: number }).statusCode;
+				if (status === 404) {
+					throw new NodeOperationError(
+						ctx.getNode(),
+						`Message ${messageId} not found in this space`,
+						{ itemIndex: i },
+					);
+				}
+				throw new NodeApiError(ctx.getNode(), err as JsonObject, { itemIndex: i });
+			}
 			if (!msg) {
 				throw new NodeOperationError(
 					ctx.getNode(),
