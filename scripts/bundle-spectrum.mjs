@@ -10,7 +10,7 @@
 // esbuild can resolve and inline both module specifiers.
 
 import { build } from 'esbuild';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -90,7 +90,6 @@ async function bundle({ src, out }) {
 		legalComments: 'eof',
 		plugins: [spectrumImportPlugin],
 	});
-	await rm(out + '.map', { force: true });
 }
 
 for (const ep of entryPoints) {

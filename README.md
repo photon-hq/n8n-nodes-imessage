@@ -20,7 +20,7 @@ A Photon project. Sign up at [app.photon.codes](https://app.photon.codes) and cr
 
 Follow the [n8n community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/):
 
-```
+```bash
 npm install n8n-nodes-imessage
 ```
 
@@ -169,7 +169,7 @@ There is no "off" switch by design — letting it be one would be a foot-gun tha
 
 For "tap to message" CTAs on a landing page or email, Spectrum exposes a public deep-link redirect that hands the user off to Messages with a draft already populated:
 
-```
+```text
 https://spectrum.photon.codes/users/{userId}/redirect?msg=Hi%20there
 ```
 
