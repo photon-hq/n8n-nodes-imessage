@@ -9,33 +9,42 @@ const path = require('node:path');
 const readline = require('node:readline');
 
 function resolveDeviceAuthModule() {
-	const candidates = [
-		path.join(__dirname, '..', 'dist', 'nodes', 'PhotonIMessage', 'lib', 'deviceAuth.js'),
-		path.join(__dirname, '..', 'nodes', 'PhotonIMessage', 'lib', 'deviceAuth.ts'),
-	];
-	for (const candidate of candidates) {
-		try {
-			require.resolve(candidate);
-			return candidate;
-		} catch {
-			continue;
-		}
-	}
-	throw new Error(
-		'Cannot find compiled deviceAuth.js. If running from source, run `npm run build` first.',
+	const compiled = path.join(
+		__dirname,
+		'..',
+		'dist',
+		'nodes',
+		'PhotonIMessage',
+		'lib',
+		'deviceAuth.js',
 	);
+	try {
+		require.resolve(compiled);
+		return compiled;
+	} catch {
+		throw new Error(
+			'Cannot find dist/nodes/PhotonIMessage/lib/deviceAuth.js. Run `npm run build` first.',
+		);
+	}
 }
 
 function parseArgs(argv) {
 	const args = { _: [] };
+	const readValue = (flag, i) => {
+		const v = argv[i + 1];
+		if (!v || v.startsWith('-')) {
+			throw new Error(`Missing value for ${flag}`);
+		}
+		return v;
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--help' || a === '-h') args.help = true;
 		else if (a === '--no-browser') args.noBrowser = true;
 		else if (a === '--json') args.json = true;
-		else if (a === '--api-host') args.apiHost = argv[++i];
-		else if (a === '--client-id') args.clientId = argv[++i];
-		else if (a === '--project') args.project = argv[++i];
+		else if (a === '--api-host') args.apiHost = readValue('--api-host', i), i++;
+		else if (a === '--client-id') args.clientId = readValue('--client-id', i), i++;
+		else if (a === '--project') args.project = readValue('--project', i), i++;
 		else if (a.startsWith('--api-host=')) args.apiHost = a.slice('--api-host='.length);
 		else if (a.startsWith('--client-id=')) args.clientId = a.slice('--client-id='.length);
 		else if (a.startsWith('--project=')) args.project = a.slice('--project='.length);
@@ -54,17 +63,33 @@ function prompt(question) {
 	});
 }
 
-async function tryOpen(url) {
+function tryOpen(url) {
 	const { spawn } = require('node:child_process');
 	const platform = process.platform;
 	const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
-	try {
-		const child = spawn(cmd, [url], { stdio: 'ignore', detached: true, shell: platform === 'win32' });
-		child.unref();
-		return true;
-	} catch {
-		return false;
-	}
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (ok) => {
+			if (!settled) {
+				settled = true;
+				resolve(ok);
+			}
+		};
+		try {
+			const child = spawn(cmd, [url], {
+				stdio: 'ignore',
+				detached: true,
+				shell: platform === 'win32',
+			});
+			// spawn() can fail asynchronously (e.g. ENOENT when `open`/`xdg-open`
+			// is missing). A sync try/catch never sees those — listen for 'error'.
+			child.once('error', () => finish(false));
+			child.unref();
+			process.nextTick(() => finish(true));
+		} catch {
+			finish(false);
+		}
+	});
 }
 
 async function pollUntilApproved({ da, apiHost, clientId, deviceCode, interval, expiresIn }) {
