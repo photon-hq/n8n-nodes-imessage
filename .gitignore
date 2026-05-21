@@ -1,4 +1,9 @@
 node_modules/
 dist/
 *.tsbuildinfo
+*.tgz
 BLOG_DRAFT.md
+scripts/dev/
+.firecrawl/
+terminals/
+.DS_Store
