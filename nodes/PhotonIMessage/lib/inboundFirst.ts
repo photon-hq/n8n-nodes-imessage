@@ -62,8 +62,6 @@ export function enforceInboundFirst(
 	recipients: string[],
 	itemIndex: number,
 ): void {
-	if (creds.inboundFirst !== 'strict') return;
-
 	const store = loadStore(ctx);
 	seedPreApproved(store, creds.preApproved ?? '');
 

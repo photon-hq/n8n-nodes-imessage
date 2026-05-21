@@ -1,4 +1,10 @@
-import type { IHookFunctions, IHttpRequestMethods } from 'n8n-workflow';
+import type {
+	IHookFunctions,
+	IHttpRequestMethods,
+	JsonObject,
+} from 'n8n-workflow';
+import { NodeApiError } from 'n8n-workflow';
+
 import type { SpectrumCredentials, WebhookRegistration } from './types';
 
 function basicAuth(creds: SpectrumCredentials): string {
@@ -91,6 +97,6 @@ export async function deleteWebhook(
 		const status = (err as { httpCode?: string | number; statusCode?: number }).httpCode
 			?? (err as { statusCode?: number }).statusCode;
 		if (status === 404 || status === '404') return;
-		throw err;
+		throw new NodeApiError(ctx.getNode(), err as JsonObject);
 	}
 }

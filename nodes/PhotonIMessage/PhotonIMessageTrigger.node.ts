@@ -14,18 +14,115 @@ import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks, registerWebhook } from './lib/webhookApi';
 import type { WebhookRegistration } from './lib/types';
 
+/** Filters aligned with Spectrum webhook payloads (messages event).
+ *
+ * Spectrum's webhook today only delivers `text` and `attachment` content
+ * types, with attachments discriminated by MIME prefix (image/audio/video/
+ * application). The SDK's content union also includes reaction, richlink,
+ * poll, poll_option, contact, reply, edit, group, custom, and typing — these
+ * may begin arriving on webhooks in a future release. We list them here so
+ * workflows can opt in today and start receiving them with no node update.
+ */
 const CONTENT_TYPE_OPTIONS = [
-	{ name: 'All', value: '*', description: 'Trigger on every content type' },
-	{ name: 'Text', value: 'text', description: 'Plain text messages' },
-	{ name: 'Attachment', value: 'attachment', description: 'Photos, videos, files' },
-	{ name: 'Voice', value: 'voice', description: 'Voice notes' },
-	{ name: 'Reaction', value: 'reaction', description: 'Tapback reactions' },
-	{ name: 'Reply', value: 'reply', description: 'Threaded replies' },
-	{ name: 'Poll', value: 'poll', description: 'Poll messages' },
-	{ name: 'Poll Vote', value: 'poll_option', description: 'Poll vote / unvote' },
-	{ name: 'Contact', value: 'contact', description: 'Contact card shares' },
-	{ name: 'Rich Link', value: 'richlink', description: 'Rich link previews' },
+	{ name: 'All Messages', value: '*', description: 'Every inbound message on this webhook' },
+	{ name: 'Text', value: 'text', description: 'Plain text bodies' },
+	{
+		name: 'Photo (Image Attachment)',
+		value: 'photo',
+		description: 'Image attachments (mimeType image/*: HEIC, JPEG, PNG, etc.)',
+	},
+	{
+		name: 'Voice Note / Audio',
+		value: 'voice',
+		description: 'Audio attachments (mimeType audio/*: M4A, etc.). Includes iMessage voice memos.',
+	},
+	{
+		name: 'Video',
+		value: 'video',
+		description: 'Video attachments (mimeType video/*: MP4, MOV, etc.)',
+	},
+	{
+		name: 'Document / File',
+		value: 'document',
+		description: 'Non-media attachments (mimeType application/*: PDF, ZIP, etc.)',
+	},
+	{
+		name: 'Other Attachment',
+		value: 'attachment-other',
+		description: 'Any attachment whose mimeType doesn\'t fall into the categories above',
+	},
+	{
+		name: 'Reaction (Tapback)',
+		value: 'reaction',
+		description: 'Tapback reactions on a previous message. Forward-compat: not delivered on webhooks today but reserved for when Spectrum adds them.',
+	},
+	{
+		name: 'Reply (Threaded)',
+		value: 'reply',
+		description: 'Threaded reply wrapping inner content. Forward-compat.',
+	},
+	{
+		name: 'Edit',
+		value: 'edit',
+		description: 'Rewrite of a previously-sent message. Forward-compat.',
+	},
+	{
+		name: 'Rich Link Preview',
+		value: 'richlink',
+		description: 'Open Graph rich link card. Forward-compat.',
+	},
+	{
+		name: 'Poll',
+		value: 'poll',
+		description: 'A new poll posted to the conversation. Forward-compat.',
+	},
+	{
+		name: 'Poll Vote',
+		value: 'poll_option',
+		description: 'A vote (or unvote) on a poll option. Forward-compat.',
+	},
+	{
+		name: 'Contact Card',
+		value: 'contact',
+		description: 'Shared contact card (vCard). Forward-compat.',
+	},
+	{
+		name: 'Group (Album / Bundle)',
+		value: 'group',
+		description: 'Multi-item group bundle (e.g. photo album). Forward-compat.',
+	},
+	{
+		name: 'Custom (Platform-Specific)',
+		value: 'custom',
+		description: 'Provider-defined custom payload. Forward-compat.',
+	},
 ];
+
+/** Classify an attachment by its MIME prefix into one of our display buckets. */
+function classifyAttachment(mime: string): 'photo' | 'voice' | 'video' | 'document' | 'attachment-other' {
+	if (mime.startsWith('image/')) return 'photo';
+	if (mime.startsWith('audio/')) return 'voice';
+	if (mime.startsWith('video/')) return 'video';
+	if (mime.startsWith('application/')) return 'document';
+	return 'attachment-other';
+}
+
+function matchesContentTypeFilter(
+	selected: string[],
+	rawType: string,
+	content: Record<string, unknown>,
+): boolean {
+	if (selected.length === 0 || selected.includes('*')) return true;
+	const mime = String(content.mimeType ?? '');
+	for (const sel of selected) {
+		if (sel === rawType) return true;
+		// Map the rawType "attachment" onto our split buckets.
+		if (rawType === 'attachment' && sel === classifyAttachment(mime)) return true;
+		// Treat the umbrella "attachment" selection as catch-all for media.
+		if (sel === 'attachment' && rawType === 'attachment') return true;
+	}
+	return false;
+}
 
 const SPACE_TYPE_OPTIONS = [
 	{ name: 'Any', value: 'any' },
@@ -80,7 +177,7 @@ export class PhotonIMessageTrigger implements INodeType {
 				options: CONTENT_TYPE_OPTIONS,
 				default: ['*'],
 				description:
-					'Filter messages by content type. Today Spectrum emits only the `messages` event family; new event categories will appear here automatically.',
+					'Filter inbound webhook payloads. Today Spectrum delivers Text and Attachment (Photo/Voice/Video/Document). The remaining variants are reserved for forward compatibility — when Spectrum starts emitting them, this trigger will route them too without a node update. See https://docs.photon.codes/webhooks/events.',
 			},
 			{
 				displayName: 'Filters',
@@ -233,7 +330,8 @@ export class PhotonIMessageTrigger implements INodeType {
 
 		const senderAddress = payload.message?.sender?.id ?? '';
 		const spaceId = payload.message?.space?.id ?? payload.space?.id ?? '';
-		const contentType = payload.message?.content?.type ?? '';
+		const content = payload.message?.content ?? {};
+		const rawContentType = payload.message?.content?.type ?? '';
 
 		if (senderAddress) {
 			recordInbound(this, senderAddress);
@@ -241,12 +339,22 @@ export class PhotonIMessageTrigger implements INodeType {
 
 		const contentTypes = this.getNodeParameter('contentTypes', []) as string[];
 		if (
-			contentTypes.length > 0 &&
-			!contentTypes.includes('*') &&
-			!contentTypes.includes(contentType)
+			!matchesContentTypeFilter(
+				contentTypes,
+				rawContentType,
+				content as Record<string, unknown>,
+			)
 		) {
 			return { webhookResponse: 'ok', noWebhookResponse: false };
 		}
+
+		const mime = String(content.mimeType ?? '');
+		const attachmentKind =
+			rawContentType === 'attachment' ? classifyAttachment(mime) : undefined;
+		const contentType =
+			rawContentType === 'attachment' && attachmentKind === 'voice'
+				? 'voice'
+				: rawContentType;
 
 		const filters = this.getNodeParameter('filters', {}) as {
 			senderAddress?: string;
@@ -276,7 +384,6 @@ export class PhotonIMessageTrigger implements INodeType {
 			}
 		}
 
-		const content = payload.message?.content ?? {};
 		const output: INodeExecutionData = {
 			json: {
 				event: payload.event,
@@ -286,14 +393,19 @@ export class PhotonIMessageTrigger implements INodeType {
 				platform: payload.message?.platform ?? 'iMessage',
 				direction: payload.message?.direction ?? 'inbound',
 				spaceId: spaceId || null,
+				// `space.id` shape is the only signal currently surfaced for DM vs.
+				// group; webhook payloads don't include `space.type` today.
+				spaceType: spaceId.includes(';-;') ? 'dm' : spaceId ? 'group' : null,
 				sender: senderAddress || null,
 				senderPlatform: payload.message?.sender?.platform ?? null,
 				timestamp: payload.message?.timestamp ?? null,
 				contentType: contentType || null,
-				text: contentType === 'text' ? (content.text as string | undefined) ?? null : null,
+				attachmentKind: attachmentKind ?? null,
+				text: contentType === 'text' ? ((content.text as string | undefined) ?? null) : null,
 				attachment:
-					contentType === 'attachment' || contentType === 'voice'
+					rawContentType === 'attachment'
 						? {
+								kind: attachmentKind ?? null,
 								name: content.name ?? null,
 								mimeType: content.mimeType ?? null,
 								size: content.size ?? null,
@@ -306,13 +418,65 @@ export class PhotonIMessageTrigger implements INodeType {
 								targetId: (content.target as { id?: string } | undefined)?.id ?? null,
 							}
 						: null,
+				reply:
+					contentType === 'reply'
+						? {
+								targetId: (content.target as { id?: string } | undefined)?.id ?? null,
+								innerType:
+									(content.content as { type?: string } | undefined)?.type ?? null,
+							}
+						: null,
+				edit:
+					contentType === 'edit'
+						? {
+								targetId: (content.target as { id?: string } | undefined)?.id ?? null,
+								innerType:
+									(content.content as { type?: string } | undefined)?.type ?? null,
+							}
+						: null,
+				richlink:
+					contentType === 'richlink'
+						? {
+								url: (content.url as string | undefined) ?? null,
+							}
+						: null,
+				poll:
+					contentType === 'poll'
+						? {
+								title: (content.title as string | undefined) ?? null,
+								options: ((content.options as Array<{ title?: string }> | undefined) ?? [])
+									.map((o) => o?.title ?? '')
+									.filter(Boolean),
+							}
+						: null,
 				pollVote:
 					contentType === 'poll_option'
 						? {
-								selected: content.selected ?? null,
-								title: content.title ?? null,
+								selected: (content.selected as boolean | undefined) ?? null,
+								title: (content.title as string | undefined) ?? null,
+								pollId:
+									(content.poll as { id?: string } | undefined)?.id ?? null,
 							}
 						: null,
+				contact:
+					contentType === 'contact'
+						? {
+								name: content.name ?? null,
+								phones: content.phones ?? null,
+								emails: content.emails ?? null,
+								org: content.org ?? null,
+							}
+						: null,
+				group:
+					contentType === 'group'
+						? {
+								itemCount: Array.isArray(content.items)
+									? (content.items as unknown[]).length
+									: 0,
+							}
+						: null,
+				custom:
+					contentType === 'custom' ? (content.raw ?? content) : null,
 				raw: payload,
 			},
 		};
