@@ -159,6 +159,11 @@ export class PhotonIMessageTrigger implements INodeType {
 				httpMethod: 'POST',
 				responseMode: 'onReceived',
 				path: 'webhook',
+				// Instruct n8n's body-parser to preserve the raw bytes before
+				// JSON deserialisation — required for HMAC-SHA256 verification.
+				// The defensive readRawBody() call in webhook() remains as a
+				// secondary safeguard on older hosts.
+				rawBody: true,
 			},
 		],
 		credentials: [

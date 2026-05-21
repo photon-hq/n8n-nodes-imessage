@@ -710,7 +710,12 @@ async function runPreAuthentication(
 					base.imessageLines = lines.imessageLines;
 					base.primaryLineNumber = lines.primaryLineNumber;
 					base.lineStatus = buildLineStatus(lines, yourPhone);
-				} catch {
+				} catch (err) {
+					if (isAuthError(err)) {
+						throw new Error(
+							'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
+						);
+					}
 					// Non-fatal — runtime still works; next reopen refreshes the line UI.
 				}
 				return connectedState(base);
