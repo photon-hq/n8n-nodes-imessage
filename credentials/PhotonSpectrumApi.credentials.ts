@@ -43,6 +43,14 @@ const DEFAULT_RUNTIME = 'https://spectrum.photon.codes';
 const DEFAULT_SCOPE = 'openid profile email';
 const PENDING_SIGN_IN_TEST_MESSAGE =
 	'Still waiting for browser approval. Open the sign-in link above, confirm the approval code, then click Retry at the top (not Save).';
+/**
+ * Sentinel value written to `bearerToken` when the user supplied projectId/secret
+ * manually (no OAuth device-flow). Compared in other branches to distinguish a
+ * real bearer from the manual-setup placeholder — extracted to a named constant
+ * so a typo (`'manuall'`, `'manaul'`) silently breaking the branch shows up as a
+ * compile error rather than a runtime regression.
+ */
+const BEARER_MANUAL_SENTINEL = 'manual';
 // n8n RoutingNode evaluates $credentials BEFORE preAuthentication runs, so we cannot
 // reliably branch on bearerToken vs projectSecret here. The expression also cannot
 // use regex literals. We always hit the dashboard probe (auth/ok) — it's a 200 OK
@@ -252,7 +260,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			default: '',
 		},
 		{
-			displayName: 'Show Project Options',
+			displayName: 'Show project options',
 			name: 'showProjectOptions',
 			type: 'boolean',
 			default: false,
@@ -413,7 +421,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			},
 		},
 		{
-			displayName: 'Pre-Approved Recipients (Optional)',
+			displayName: 'Pre-approved recipients (optional)',
 			name: 'preApproved',
 			type: 'string',
 			default: '',
@@ -426,7 +434,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			},
 		},
 		{
-			displayName: 'Show Technical Details',
+			displayName: 'Show technical details',
 			name: 'showTechnicalDetails',
 			type: 'boolean',
 			default: false,
@@ -452,20 +460,20 @@ export class PhotonSpectrumApi implements ICredentialType {
 		},
 
 		// ── Hidden state ────────────────────────────────────────────────────
-		{ displayName: 'Line Mode Key', name: 'lineMode', type: 'hidden', default: '' },
-		{ displayName: 'Line Mode Label', name: 'lineModeLabel', type: 'hidden', default: '' },
+		{ displayName: 'Line mode key', name: 'lineMode', type: 'hidden', default: '' },
+		{ displayName: 'Line mode label', name: 'lineModeLabel', type: 'hidden', default: '' },
 		{ displayName: 'Spectrum Runtime URL', name: 'apiHost', type: 'hidden', default: DEFAULT_RUNTIME },
 		{ displayName: 'Dashboard URL', name: 'dashboardHost', type: 'hidden', default: DEFAULT_DASHBOARD },
 		{ displayName: 'OAuth Client ID', name: 'clientId', type: 'hidden', default: DEFAULT_CLIENT_ID },
 		{
-			displayName: 'Bearer Token',
+			displayName: 'Bearer token',
 			name: 'bearerToken',
 			type: 'hidden',
 			typeOptions: { expirable: true, password: true },
 			default: '',
 		},
-		{ displayName: 'Device Code', name: 'deviceCode', type: 'hidden', default: '' },
-		{ displayName: 'Device Code Expires At', name: 'deviceCodeExpiresAt', type: 'hidden', default: 0 },
+		{ displayName: 'Device code', name: 'deviceCode', type: 'hidden', default: '' },
+		{ displayName: 'Device code expires at', name: 'deviceCodeExpiresAt', type: 'hidden', default: 0 },
 	];
 
 	async preAuthentication(
@@ -573,7 +581,7 @@ async function runPreAuthentication(
 			const base: IDataObject = {
 				projectId: projectIdInput,
 				projectSecret: projectSecretInput,
-				bearerToken: bearer || 'manual',
+				bearerToken: bearer || BEARER_MANUAL_SENTINEL,
 				projectRef: projectIdInput,
 				setupMethod: manual ? 'manual' : 'browser',
 				manualFallback: manual,
@@ -620,19 +628,10 @@ async function runPreAuthentication(
 			return withConnectionState(base, 'connected');
 		}
 
-		if (manual && hasConnectedSecret) {
-			return enrichConnected(helper, credentials, {
-				projectId: projectIdInput,
-				projectSecret: projectSecretInput,
-				bearerToken: 'manual',
-				deviceCode: '',
-				deviceCodeExpiresAt: 0,
-				verificationUrl: '',
-				userCode: '',
-				setupMethod: 'manual',
-				manualFallback: true,
-			});
-		}
+		// Note: the fast path above already returns for any `hasConnectedSecret`
+		// case (manual or browser-flow). Code below this point only runs when
+		// the credential is *not yet* fully connected — either pending the
+		// device-flow approval, mid-`mintFromBearer`, or starting a fresh flow.
 
 		const deviceCode = ((credentials.deviceCode as string) || '').trim();
 		const expiresAt = Number(credentials.deviceCodeExpiresAt ?? 0);
@@ -725,33 +724,11 @@ async function runPreAuthentication(
 			return startPendingDeviceFlow(helper, dashboardHost, clientId);
 		}
 
-		if (bearer && bearer !== 'manual' && hasConnectedSecret) {
-			try {
-				const { projectId, projectSecret } = await mintFromBearer(helper, {
-					bearer,
-					dashboardHost,
-					projectIdInput,
-					projectName: (credentials.projectName as string) || undefined,
-					createProjectIfNone: wantsAutoCreateProject(credentials),
-				});
-				return connectedState({
-					bearerToken: bearer,
-					projectId,
-					projectSecret,
-					deviceCode: '',
-					deviceCodeExpiresAt: 0,
-					verificationUrl: '',
-					userCode: '',
-					setupMethod: 'browser',
-					manualFallback: false,
-					createProjectIfNone: wantsAutoCreateProject(credentials),
-				});
-			} catch (err) {
-				const status = (err as { httpCode?: number; statusCode?: number }).httpCode
-					?? (err as { statusCode?: number }).statusCode;
-				if (status !== 401 && status !== 403) throw err;
-			}
-		}
+		// The `(bearer && bearer !== BEARER_MANUAL_SENTINEL && hasConnectedSecret)`
+		// rehydration branch that used to live here was unreachable — the fast
+		// path at the top returns for every `hasConnectedSecret` case. If you
+		// need to add a true bearer-rehydration path in the future (e.g. cached
+		// bearer but missing projectId), gate it on `!hasConnectedSecret`.
 
 		return startPendingDeviceFlow(helper, dashboardHost, clientId);
 }
@@ -976,53 +953,3 @@ async function mintFromBearer(
 	return { projectId: spectrumId, projectSecret };
 }
 
-async function enrichConnected(
-	helper: IHttpRequestHelper,
-	credentials: ICredentialDataDecryptedObject,
-	base: IDataObject,
-): Promise<IDataObject> {
-	const projectId = String(base.projectId ?? '').trim();
-	const projectSecret = String(base.projectSecret ?? '').trim();
-	if (!projectId || !projectSecret) return withConnectionState(base, 'connected');
-
-	const apiHost = trimHost(credentials.apiHost, DEFAULT_RUNTIME);
-	const yourPhone = ((credentials.yourPhoneNumber as string) || '').trim();
-
-	// Best-effort enrichment — must not fail Save/Test (n8n aborts on slow preAuthentication).
-	let lines: Awaited<ReturnType<typeof lineInfoFields>> | undefined;
-	try {
-		const enrich = Promise.all([
-			provisionSpectrumProject(helper, {
-				apiHost,
-				projectId,
-				projectSecret,
-				contactPhone: yourPhone || undefined,
-			}),
-			lineInfoFields(helper, apiHost, projectId, projectSecret, yourPhone || undefined),
-		]);
-		const [, lineResult] = await Promise.race([
-			enrich,
-			timeoutAfter(8_000, 'enrich timeout'),
-		]);
-		lines = lineResult;
-	} catch {
-		lines = undefined;
-	}
-
-	const lineStatus = lines?.primaryLineNumber
-		? lines.lineModeLabel
-		: lines
-			? buildLineStatus(lines, yourPhone)
-			: 'Connected — open this credential again after your first workflow run to refresh line details.';
-
-	return withConnectionState(
-		{
-			...base,
-			...(lines ?? {}),
-			lineStatus,
-			projectSecret,
-			projectRef: projectId,
-		},
-		'connected',
-	);
-}
