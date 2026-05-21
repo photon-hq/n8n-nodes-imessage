@@ -18,13 +18,15 @@ import {
 	TAPBACKS,
 	type IMessageEffect,
 	type SpectrumCredentials,
-	type Tapback,
 } from './lib/types';
 
-const REACTION_OPTIONS = TAPBACKS.map((t) => ({
-	name: t.charAt(0).toUpperCase() + t.slice(1),
-	value: t,
-}));
+const REACTION_OPTIONS = [
+	...TAPBACKS.map((t) => ({
+		name: t.charAt(0).toUpperCase() + t.slice(1),
+		value: t,
+	})),
+	{ name: 'Custom (Emoji / String)', value: '__custom__' },
+];
 
 const EFFECT_OPTIONS = [
 	{ name: 'None', value: 'none' as const, description: 'No special effect' },
@@ -47,6 +49,16 @@ function splitAddresses(raw: string): string[] {
 		.filter(Boolean);
 }
 
+// Brief in-process delay used by the Spectrum `responding()` wrapper. n8n
+// community-node lint forbids both `setTimeout` (restricted global) and
+// `node:timers/promises`, so we suppress on the resolved call site directly.
+function sleep(ms: number): Promise<void> {
+	return new Promise<void>((resolve) => {
+		// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals
+		setTimeout(resolve, ms);
+	});
+}
+
 export class PhotonIMessage implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'iMessage by Photon',
@@ -55,7 +67,7 @@ export class PhotonIMessage implements INodeType {
 		group: ['output'],
 		version: 1,
 		subtitle:
-			'={{ ({"sendMessage":"Send Message","sendAttachment":"Send Attachment","sendVoice":"Send Voice Note","sendContact":"Share Contact","sendRichLink":"Send Rich Link","sendGroup":"Send Group (Album)","editMessage":"Edit Message","reactToMessage":"React","replyToMessage":"Reply","createSpace":"Create / Resolve Space","startTyping":"Start Typing","stopTyping":"Stop Typing","setBackground":"Set Chat Background","createPoll":"Create Poll"}[$parameter["operation"]] || $parameter["operation"]) }}',
+			'={{ ({"sendMessage":"Send Message","sendAttachment":"Send Attachment","sendVoice":"Send Voice Note","sendContact":"Share Contact","sendRichLink":"Send Rich Link","sendGroup":"Send Group (Album)","sendCustom":"Send Custom Payload","getMessage":"Get Message","editMessage":"Edit Message","reactToMessage":"React","replyToMessage":"Reply","createSpace":"Create / Resolve Space","startTyping":"Start Typing","stopTyping":"Stop Typing","setBackground":"Set Chat Background","wrapWithTyping":"Send With Typing","createPoll":"Create Poll","resolveUser":"Resolve User"}[$parameter["operation"]] || $parameter["operation"]) }}',
 		description: 'Send iMessages, react, reply, edit, share contacts, set chat backgrounds, and more — backed by Spectrum',
 		defaults: { name: 'iMessage by Photon' },
 		inputs: [NodeConnectionTypes.Main],
@@ -74,10 +86,11 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
-					{ name: 'Message', value: 'message', description: 'Send, react, reply, or edit messages' },
-					{ name: 'Space', value: 'space', description: 'Create or resolve conversations, manage typing, set backgrounds' },
-					{ name: 'Poll', value: 'poll', description: 'Create polls in a conversation' },
 					{ name: 'Contact', value: 'contact', description: 'Share contact cards' },
+					{ name: 'Message', value: 'message', description: 'Send, react, reply, edit, get messages' },
+					{ name: 'Poll', value: 'poll', description: 'Create polls in a conversation' },
+					{ name: 'Space', value: 'space', description: 'Create or resolve conversations, manage typing, set backgrounds' },
+					{ name: 'User', value: 'user', description: 'Resolve a user by phone or email' },
 				],
 				default: 'message',
 			},
@@ -93,9 +106,11 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['message'] } },
 				options: [
 					{ name: 'Edit Message', value: 'editMessage', action: 'Edit a sent message', description: 'Edit the text of a previously sent message you own' },
-					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback reaction' },
-					{ name: 'Reply to Message', value: 'replyToMessage', action: 'Reply in thread', description: 'Send a threaded reply to a specific message' },
+					{ name: 'Get Message', value: 'getMessage', action: 'Get a message by ID', description: 'Look up a message in a space by its ID (returns content, sender, timestamp)' },
+					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback or any custom emoji as a reaction' },
+					{ name: 'Reply to Message', value: 'replyToMessage', action: 'Reply in thread', description: 'Send a threaded reply (text and/or one attachment) to a specific message' },
 					{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file from a path or n8n binary input' },
+					{ name: 'Send Custom Payload', value: 'sendCustom', action: 'Send a platform specific payload', description: 'Send a raw provider-defined custom content payload (advanced)' },
 					{ name: 'Send Group (Album)', value: 'sendGroup', action: 'Send a bundled group', description: 'Bundle multiple items into one logical unit (album)' },
 					{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message (optionally with an effect)' },
 					{ name: 'Send Rich Link', value: 'sendRichLink', action: 'Send a rich link preview', description: 'Send a URL rendered as a rich link card (Open Graph)' },
@@ -116,7 +131,15 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: {
 					show: {
 						resource: ['message'],
-						operation: ['sendMessage', 'sendAttachment', 'sendVoice', 'sendRichLink', 'sendGroup'],
+						operation: [
+							'sendMessage',
+							'sendAttachment',
+							'sendVoice',
+							'sendRichLink',
+							'sendGroup',
+							'sendCustom',
+							'getMessage',
+						],
 					},
 				},
 			},
@@ -164,14 +187,14 @@ export class PhotonIMessage implements INodeType {
 			{
 				displayName: 'Source',
 				name: 'attachmentSource',
-				type: 'options',
-				options: [
-					{ name: 'File Path', value: 'path', description: 'Absolute file path readable by the n8n process' },
+						type: 'options',
+						options: [
 					{ name: 'Binary Property', value: 'binary', description: 'Use the binary data on the incoming item' },
-				],
+					{ name: 'File Path', value: 'path', description: 'Absolute file path readable by the n8n process' },
+						],
 				default: 'path',
 				displayOptions: { show: { resource: ['message'], operation: ['sendAttachment', 'sendVoice'] } },
-			},
+					},
 			{
 				displayName: 'File Path',
 				name: 'filePath',
@@ -235,10 +258,10 @@ export class PhotonIMessage implements INodeType {
 					{
 						displayName: 'Send From Phone',
 						name: 'fromPhone',
-						type: 'string',
-						default: '',
+				type: 'string',
+				default: '',
 						placeholder: '+15559999999',
-					},
+			},
 				],
 			},
 
@@ -263,8 +286,8 @@ export class PhotonIMessage implements INodeType {
 					{
 						displayName: 'Send From Phone',
 						name: 'fromPhone',
-						type: 'string',
-						default: '',
+				type: 'string',
+				default: '',
 					},
 				],
 			},
@@ -287,19 +310,19 @@ export class PhotonIMessage implements INodeType {
 							{
 								displayName: 'Kind',
 								name: 'kind',
-								type: 'options',
-								options: [
+						type: 'options',
+						options: [
 									{ name: 'Attachment (Path)', value: 'attachmentPath' },
 									{ name: 'Attachment (Binary)', value: 'attachmentBinary' },
 									{ name: 'Text', value: 'text' },
-								],
+						],
 								default: 'attachmentPath',
-							},
-							{
+					},
+			{
 								displayName: 'Value',
 								name: 'value',
-								type: 'string',
-								default: '',
+				type: 'string',
+				default: '',
 								description:
 									'For Attachment (Path): the file path. For Attachment (Binary): the binary property name. For Text: the text to send.',
 							},
@@ -377,9 +400,47 @@ export class PhotonIMessage implements INodeType {
 				name: 'replyText',
 				type: 'string',
 				typeOptions: { rows: 3 },
-				required: true,
 				default: '',
+				description: 'Optional reply text. Combine with an attachment under Additional Fields to send rich threaded replies.',
 				displayOptions: { show: { resource: ['message'], operation: ['replyToMessage'] } },
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'replyOptions',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['replyToMessage'] } },
+				options: [
+					{
+						displayName: 'Attachment Binary Property',
+						name: 'attachmentBinary',
+						type: 'string',
+						default: '',
+						description: 'Reply with an attachment from this binary property on the incoming item',
+					},
+					{
+						displayName: 'Attachment File Path',
+						name: 'attachmentPath',
+						type: 'string',
+						default: '',
+						description: 'Reply with an attachment from an absolute filesystem path readable by n8n',
+					},
+					{
+						displayName: 'Attachment MIME Type',
+						name: 'attachmentMime',
+						type: 'string',
+						default: '',
+						description: 'Override MIME type when sending binary',
+					},
+					{
+						displayName: 'Attachment Name',
+						name: 'attachmentName',
+						type: 'string',
+						default: '',
+						description: 'Override displayed filename',
+					},
+				],
 			},
 			{
 				displayName: 'New Text',
@@ -398,7 +459,65 @@ export class PhotonIMessage implements INodeType {
 				options: REACTION_OPTIONS,
 				required: true,
 				default: 'love',
+				description: 'Pick a built-in tapback or "Custom" to enter any emoji or string',
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
+			},
+			{
+				displayName: 'Custom Reaction',
+				name: 'reactionCustom',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. 🔥 or any emoji',
+				description: 'Free-form reaction string. iMessage renders most emojis as tapbacks.',
+				displayOptions: {
+					show: {
+						resource: ['message'],
+						operation: ['reactToMessage'],
+						reaction: ['__custom__'],
+					},
+				},
+			},
+
+			// --- Get Message
+			{
+				displayName: 'Message ID',
+				name: 'lookupMessageId',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'spc-msg-…',
+				description: 'The Spectrum message ID to look up in the resolved space',
+				displayOptions: { show: { resource: ['message'], operation: ['getMessage'] } },
+			},
+			{
+				displayName: 'Send From Phone',
+				name: 'lookupFromPhone',
+				type: 'string',
+				default: '',
+				placeholder: '+15559999999',
+				description: 'Dedicated lines only — pick which line owns the conversation',
+				displayOptions: { show: { resource: ['message'], operation: ['getMessage'] } },
+			},
+
+			// --- Send Custom Payload
+			{
+				displayName: 'Custom Payload (JSON)',
+				name: 'customPayload',
+				type: 'json',
+				required: true,
+				default: '{}',
+				description:
+					'Raw provider-specific payload, forwarded verbatim through Spectrum\'s custom() builder. Only use this if the receiving provider understands the shape.',
+				displayOptions: { show: { resource: ['message'], operation: ['sendCustom'] } },
+			},
+			{
+				displayName: 'Send From Phone',
+				name: 'customFromPhone',
+				type: 'string',
+				default: '',
+				placeholder: '+15559999999',
+				displayOptions: { show: { resource: ['message'], operation: ['sendCustom'] } },
 			},
 
 			// =====================================================================
@@ -412,9 +531,10 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['space'] } },
 				options: [
 					{ name: 'Create / Resolve Space', value: 'createSpace', action: 'Create or resolve a conversation', description: 'Resolve a DM (one recipient) or group (many recipients) and return its Space ID' },
+					{ name: 'Send With Typing', value: 'wrapWithTyping', action: 'Send while showing typing indicator', description: 'Show the typing indicator, wait a configurable delay, then send a text (uses Spectrum responding helper)' },
+					{ name: 'Set Background', value: 'setBackground', action: 'Set chat background image' },
 					{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator' },
 					{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator' },
-					{ name: 'Set Background', value: 'setBackground', action: 'Set chat background image' },
 				],
 				default: 'createSpace',
 			},
@@ -426,29 +546,29 @@ export class PhotonIMessage implements INodeType {
 				default: '',
 				placeholder: '+15551234567 (DM) or +1..., +1... (group)',
 				description: 'Phone or email of the recipient(s). One = DM. Two or more = group.',
-				displayOptions: { show: { resource: ['space'], operation: ['createSpace', 'startTyping', 'stopTyping', 'setBackground'] } },
+				displayOptions: { show: { resource: ['space'], operation: ['createSpace', 'startTyping', 'stopTyping', 'setBackground', 'wrapWithTyping'] } },
 			},
 			{
 				displayName: 'Send From Phone',
 				name: 'spaceFromPhone',
-				type: 'string',
-				default: '',
+						type: 'string',
+						default: '',
 				placeholder: '+15559999999',
 				description: 'Dedicated lines only — pin the conversation to a specific line',
 				displayOptions: { show: { resource: ['space'] } },
-			},
-			{
+					},
+					{
 				displayName: 'Source',
 				name: 'backgroundSource',
-				type: 'options',
-				options: [
-					{ name: 'File Path', value: 'path' },
+						type: 'options',
+						options: [
 					{ name: 'Binary Property', value: 'binary' },
 					{ name: 'Clear', value: 'clear', description: 'Remove the current chat background' },
-				],
+					{ name: 'File Path', value: 'path' },
+						],
 				default: 'path',
 				displayOptions: { show: { resource: ['space'], operation: ['setBackground'] } },
-			},
+					},
 			{
 				displayName: 'File Path',
 				name: 'backgroundPath',
@@ -474,6 +594,26 @@ export class PhotonIMessage implements INodeType {
 				placeholder: 'image/jpeg',
 				description: 'Required when using a binary source',
 				displayOptions: { show: { resource: ['space'], operation: ['setBackground'], backgroundSource: ['binary'] } },
+			},
+
+			// --- Send With Typing
+			{
+				displayName: 'Text',
+				name: 'wrapText',
+				type: 'string',
+				typeOptions: { rows: 3 },
+				required: true,
+				default: '',
+				description: 'Text to send after the typing indicator has been shown for the configured delay',
+				displayOptions: { show: { resource: ['space'], operation: ['wrapWithTyping'] } },
+			},
+			{
+				displayName: 'Typing Delay (Ms)',
+				name: 'wrapDelay',
+				type: 'number',
+				default: 1500,
+				description: 'How long to keep the typing indicator visible before sending. Spectrum\'s `responding()` helper auto-clears the indicator even if anything throws.',
+				displayOptions: { show: { resource: ['space'], operation: ['wrapWithTyping'] } },
 			},
 
 			// =====================================================================
@@ -631,6 +771,31 @@ export class PhotonIMessage implements INodeType {
 				default: '',
 				displayOptions: { show: { resource: ['contact'], operation: ['shareContact'] } },
 			},
+
+			// =====================================================================
+			// USER
+			// =====================================================================
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['user'] } },
+				options: [
+					{ name: 'Resolve User', value: 'resolveUser', action: 'Resolve a user by phone or email', description: 'Look up the platform-specific user shape for a phone or email. Useful for follow-up sends that need a User reference.' },
+				],
+				default: 'resolveUser',
+			},
+			{
+				displayName: 'Address',
+				name: 'userAddress',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: '+15551234567 or alice@example.com',
+				description: 'Phone (E.164) or email to resolve into a Spectrum User',
+				displayOptions: { show: { resource: ['user'], operation: ['resolveUser'] } },
+			},
 		],
 	};
 
@@ -655,8 +820,9 @@ export class PhotonIMessage implements INodeType {
 						});
 						continue;
 					}
-					if (error instanceof NodeOperationError) throw error;
-					throw new NodeApiError(this.getNode(), error as JsonObject);
+					throw new NodeApiError(this.getNode(), error as JsonObject, {
+						itemIndex: i,
+					});
 				}
 			}
 		});
@@ -676,8 +842,8 @@ async function runOne(
 	const { app, imessage, effect: effectBuilder, background: backgroundBuilder, sp } = session;
 	const im = imessage(app);
 
-	if (resource === 'message') {
-		if (operation === 'sendMessage') {
+				if (resource === 'message') {
+				if (operation === 'sendMessage') {
 			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
 			const text = ctx.getNodeParameter('text', i) as string;
 			const opts = ctx.getNodeParameter('sendMessageOptions', i, {}) as {
@@ -709,7 +875,7 @@ async function runOne(
 			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
 			const source = ctx.getNodeParameter('attachmentSource', i) as 'path' | 'binary';
 			const opts = ctx.getNodeParameter('attachmentOptions', i, {}) as {
-				fileName?: string;
+							fileName?: string;
 				mimeType?: string;
 				duration?: number;
 				fromPhone?: string;
@@ -809,17 +975,66 @@ async function runOne(
 			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
 			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
 			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
-			const replyText = ctx.getNodeParameter('replyText', i) as string;
+			const replyText = ctx.getNodeParameter('replyText', i, '') as string;
+			const replyOpts = ctx.getNodeParameter('replyOptions', i, {}) as {
+				attachmentPath?: string;
+				attachmentBinary?: string;
+				attachmentName?: string;
+				attachmentMime?: string;
+			};
 			const recipients = splitAddresses(recipientsRaw);
 			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const target = (await space.getMessage(targetId)) as Parameters<typeof sp.reply>[1];
-			const result = await space.send(
-				sp.reply(sp.text(replyText), target) as Parameters<typeof space.send>[0],
+
+			const inner: unknown[] = [];
+			if (replyText) inner.push(sp.text(replyText));
+			if (replyOpts.attachmentPath) {
+				const meta: Record<string, unknown> = {};
+				if (replyOpts.attachmentName) meta.name = replyOpts.attachmentName;
+				if (replyOpts.attachmentMime) meta.mimeType = replyOpts.attachmentMime;
+				inner.push(
+					Object.keys(meta).length > 0
+						? (sp.attachment as (p: string, m: unknown) => unknown)(
+								replyOpts.attachmentPath,
+								meta,
+							)
+						: (sp.attachment as (p: string) => unknown)(replyOpts.attachmentPath),
+				);
+			} else if (replyOpts.attachmentBinary) {
+				const binary = await ctx.helpers.getBinaryDataBuffer(i, replyOpts.attachmentBinary);
+				const binaryMeta = ctx.helpers.assertBinaryData(i, replyOpts.attachmentBinary);
+				inner.push(
+					(sp.attachment as (b: Buffer, m: unknown) => unknown)(binary, {
+						name: replyOpts.attachmentName || binaryMeta.fileName || 'file',
+						mimeType: replyOpts.attachmentMime || binaryMeta.mimeType,
+					}),
+				);
+			}
+			if (inner.length === 0) {
+				throw new NodeOperationError(
+					ctx.getNode(),
+					'Reply requires either text or an attachment',
+					{ itemIndex: i },
+				);
+			}
+
+			// Wrap each inner content in reply(content, target) and send variadically
+			// so platforms with thread support keep them threaded together.
+			const wrapped = inner.map(
+				(content) => sp.reply(content as Parameters<typeof sp.reply>[0], target) as unknown,
 			);
+			const result =
+				wrapped.length === 1
+					? await space.send(wrapped[0] as Parameters<typeof space.send>[0])
+					: await (space.send as (...args: unknown[]) => Promise<unknown>)(...wrapped);
+			const ids = Array.isArray(result)
+				? (result as Array<{ id?: string }>).map((r) => r?.id).filter(Boolean)
+				: [(result as { id?: string } | undefined)?.id].filter(Boolean);
 			return {
 				spaceId: space.id,
-				messageId: (result as { id?: string } | undefined)?.id,
+				messageIds: ids,
+				messageId: ids[0],
 			};
 		}
 
@@ -842,13 +1057,86 @@ async function runOne(
 			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
 			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
 			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
-			const reaction = ctx.getNodeParameter('reaction', i) as Tapback;
+			const reactionRaw = ctx.getNodeParameter('reaction', i) as string;
+			const reaction =
+				reactionRaw === '__custom__'
+					? (ctx.getNodeParameter('reactionCustom', i) as string)
+					: reactionRaw;
+			if (!reaction) {
+				throw new NodeOperationError(ctx.getNode(), 'Reaction is required', {
+					itemIndex: i,
+				});
+			}
 			const recipients = splitAddresses(recipientsRaw);
 			enforceInboundFirst(ctx, credentials, recipients, i);
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const target = await space.getMessage(targetId);
 			await target.react(reaction);
 			return { spaceId: space.id, targetId, reaction };
+		}
+
+		if (operation === 'getMessage') {
+			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
+			const fromPhone = ctx.getNodeParameter('lookupFromPhone', i, '') as string;
+			const messageId = ctx.getNodeParameter('lookupMessageId', i) as string;
+			const recipients = splitAddresses(recipientsRaw);
+			const space = await resolveSpace(im, recipients, fromPhone);
+			const msg = (await space.getMessage(messageId)) as
+				| (Awaited<ReturnType<typeof space.getMessage>> & {
+						id: string;
+						platform?: string;
+						timestamp?: Date;
+						direction?: string;
+						content?: { type?: string; text?: string };
+						sender?: { id: string };
+				  })
+				| undefined;
+			if (!msg) {
+				throw new NodeOperationError(
+					ctx.getNode(),
+					`Message ${messageId} not found in this space`,
+					{ itemIndex: i },
+				);
+			}
+			return {
+				spaceId: space.id,
+				messageId: msg.id,
+				platform: msg.platform,
+				direction: msg.direction,
+				timestamp: msg.timestamp,
+				contentType: msg.content?.type,
+				text: msg.content?.text,
+				senderId: msg.sender?.id,
+			};
+		}
+
+		if (operation === 'sendCustom') {
+			const recipientsRaw = ctx.getNodeParameter('recipients', i) as string;
+			const fromPhone = ctx.getNodeParameter('customFromPhone', i, '') as string;
+			const payloadRaw = ctx.getNodeParameter('customPayload', i) as unknown;
+			let payload: unknown = payloadRaw;
+			if (typeof payloadRaw === 'string') {
+				try {
+					payload = JSON.parse(payloadRaw);
+				} catch (parseError) {
+					throw new NodeOperationError(
+						ctx.getNode(),
+						`Custom payload is not valid JSON: ${(parseError as Error).message}`,
+						{ itemIndex: i },
+					);
+				}
+			}
+			const recipients = splitAddresses(recipientsRaw);
+			enforceInboundFirst(ctx, credentials, recipients, i);
+			const space = await resolveSpace(im, recipients, fromPhone);
+			const customBuilder = sp.custom as (raw: unknown) => unknown;
+			const result = await space.send(
+				customBuilder(payload) as Parameters<typeof space.send>[0],
+			);
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+			};
 		}
 	}
 
@@ -878,6 +1166,19 @@ async function runOne(
 		if (operation === 'stopTyping') {
 			await space.stopTyping();
 			return { spaceId: space.id, typing: false };
+		}
+		if (operation === 'wrapWithTyping') {
+			const wrapText = ctx.getNodeParameter('wrapText', i) as string;
+			const delayMs = ctx.getNodeParameter('wrapDelay', i, 1500) as number;
+			const result = await space.responding(async () => {
+				if (delayMs > 0) await sleep(delayMs);
+				return space.send(sp.text(wrapText) as Parameters<typeof space.send>[0]);
+			});
+			return {
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				typingMs: delayMs,
+			};
 		}
 		if (operation === 'setBackground') {
 			const source = ctx.getNodeParameter('backgroundSource', i) as
@@ -930,8 +1231,8 @@ async function runOne(
 			spaceId: space.id,
 			messageId: (result as { id?: string } | undefined)?.id,
 			title,
-			options,
-		};
+							options,
+						};
 	}
 
 	if (resource === 'contact' && operation === 'shareContact') {
@@ -975,6 +1276,24 @@ async function runOne(
 		};
 	}
 
+	if (resource === 'user' && operation === 'resolveUser') {
+		const address = ctx.getNodeParameter('userAddress', i) as string;
+		if (!address.trim()) {
+			throw new NodeOperationError(ctx.getNode(), 'Address is required', {
+				itemIndex: i,
+			});
+		}
+		const user = (await im.user(address.trim())) as {
+			id: string;
+			__platform?: string;
+		} & Record<string, unknown>;
+		return {
+			userId: user.id,
+			platform: user.__platform,
+			address: address.trim(),
+		};
+	}
+
 	throw new NodeOperationError(
 		ctx.getNode(),
 		`Unsupported resource/operation: ${resource}/${operation}`,
@@ -989,6 +1308,7 @@ interface ResolvedSpace {
 	send: (content: unknown) => Promise<{ id?: string } | undefined>;
 	startTyping: () => Promise<void>;
 	stopTyping: () => Promise<void>;
+	responding: <T>(fn: () => T | Promise<T>) => Promise<T>;
 	getMessage: (id: string) => Promise<{
 		id: string;
 		react: (emoji: string) => Promise<void>;

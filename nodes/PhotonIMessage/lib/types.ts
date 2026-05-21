@@ -2,7 +2,6 @@ export interface SpectrumCredentials {
 	projectId: string;
 	projectSecret: string;
 	apiHost: string;
-	inboundFirst: 'strict' | 'off';
 	preApproved: string;
 }
 
@@ -26,7 +25,12 @@ export const TAPBACKS = [
 	'emphasize',
 	'question',
 ] as const;
-export type Tapback = (typeof TAPBACKS)[number];
+export type NamedTapback = (typeof TAPBACKS)[number];
+/**
+ * Spectrum accepts any string as a reaction — the named tapbacks are just
+ * convenience constants. Custom emoji like "🔥" work too.
+ */
+export type Tapback = NamedTapback | string;
 
 export const SCREEN_EFFECTS = [
 	'confetti',
