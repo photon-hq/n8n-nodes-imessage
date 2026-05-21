@@ -35,6 +35,13 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
 	});
 }
 
+function isAuthError(err: unknown): boolean {
+	const status =
+		(err as { httpCode?: number; statusCode?: number }).httpCode ??
+		(err as { statusCode?: number }).statusCode;
+	return status === 401 || status === 403;
+}
+
 // `photon-cli` is the only client id currently allowlisted by Spectrum's
 // device-flow endpoint. Override via the "OAuth Client ID" field if needed.
 const DEFAULT_CLIENT_ID = 'photon-cli';
@@ -608,7 +615,12 @@ async function runPreAuthentication(
 					}),
 					timeoutAfter(6000, 'provision timeout'),
 				]);
-			} catch {
+			} catch (err) {
+				if (isAuthError(err)) {
+					throw new Error(
+						'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
+					);
+				}
 				// Non-fatal: line will surface on next reopen when API is healthy.
 			}
 			try {
@@ -621,7 +633,12 @@ async function runPreAuthentication(
 				base.imessageLines = lines.imessageLines;
 				base.primaryLineNumber = lines.primaryLineNumber;
 				base.lineStatus = buildLineStatus(lines, yourPhone);
-			} catch {
+			} catch (err) {
+				if (isAuthError(err)) {
+					throw new Error(
+						'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
+					);
+				}
 				// Keep going — runtime auth still works with just projectId+secret.
 			}
 

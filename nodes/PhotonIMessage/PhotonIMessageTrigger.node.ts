@@ -226,13 +226,9 @@ export class PhotonIMessageTrigger implements INodeType {
 				const stored = staticData.webhook as StoredWebhook | undefined;
 				if (!stored?.id) return false;
 
-				try {
-					const creds = await getSpectrumCredentials(this);
-					const webhooks = await listWebhooks(this, creds);
-					return webhooks.some((w) => w.id === stored.id);
-				} catch {
-					return false;
-				}
+				const creds = await getSpectrumCredentials(this);
+				const webhooks = await listWebhooks(this, creds);
+				return webhooks.some((w) => w.id === stored.id);
 			},
 
 			async create(this: IHookFunctions): Promise<boolean> {

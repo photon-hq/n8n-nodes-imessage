@@ -45,6 +45,11 @@ async function call<T>(
 		body,
 		json: true,
 	})) as SpectrumResponse<T>;
+	if (!response?.succeed) {
+		throw new NodeApiError(ctx.getNode(), {
+			message: `Spectrum webhook API call failed: ${method} ${path}`,
+		});
+	}
 	return response.data;
 }
 
