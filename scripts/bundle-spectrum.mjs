@@ -33,24 +33,35 @@ const entryPoints = [
  * esbuild plugin that rewrites `spectrumClient.ts` so the bundler sees the
  * spectrum-ts imports as static ESM dynamic imports. Without this, the eval
  * strings remain as runtime lookups and spectrum-ts is never inlined.
+ *
+ * Each rewrite is tracked independently — a partial match (e.g. only the
+ * `spectrum-ts` import substituted but not its `providers/imessage` subpath)
+ * would otherwise pass the loose `rewritten !== original` check and ship a
+ * broken artifact with one live `eval()` call esbuild can never reach.
  */
 const spectrumImportPlugin = {
 	name: 'spectrum-import-rewrite',
 	setup(buildApi) {
 		buildApi.onLoad({ filter: /spectrumClient\.ts$/ }, async (args) => {
 			const original = await readFile(args.path, 'utf8');
+			let rewroteRoot = false;
+			let rewroteImessage = false;
 			const rewritten = original
-				.replace(
-					/\(0,\s*eval\)\('import\("spectrum-ts"\)'\)/,
-					'import("spectrum-ts")',
-				)
+				.replace(/\(0,\s*eval\)\('import\("spectrum-ts"\)'\)/, () => {
+					rewroteRoot = true;
+					return 'import("spectrum-ts")';
+				})
 				.replace(
 					/\(0,\s*eval\)\(\s*'import\("spectrum-ts\/providers\/imessage"\)',?\s*\)/,
-					'import("spectrum-ts/providers/imessage")',
+					() => {
+						rewroteImessage = true;
+						return 'import("spectrum-ts/providers/imessage")';
+					},
 				);
-			if (rewritten === original) {
+			if (!rewroteRoot || !rewroteImessage) {
 				throw new Error(
-					'bundle-spectrum: failed to rewrite spectrumClient.ts — eval markers did not match. Update the regexes in scripts/bundle-spectrum.mjs.',
+					`bundle-spectrum: partial rewrite of spectrumClient.ts (root=${rewroteRoot}, imessage=${rewroteImessage}). ` +
+						'Both eval markers must match — update the regexes in scripts/bundle-spectrum.mjs to track upstream changes.',
 				);
 			}
 			return { contents: rewritten, loader: 'ts' };
@@ -71,7 +82,12 @@ async function bundle({ src, out }) {
 		conditions: ['import', 'node', 'default'],
 		sourcemap: false,
 		logLevel: 'warning',
-		legalComments: 'none',
+		// Preserve `/*! … */` legal comments at end-of-file so any
+		// attribution / license notices from bundled-in dependencies survive
+		// the post-build. spectrum-ts and its transitive deps are MIT today,
+		// but `eof` is the conservative choice if any future dep drops in an
+		// Apache-2 NOTICE or similar attribution requirement.
+		legalComments: 'eof',
 		plugins: [spectrumImportPlugin],
 	});
 	await rm(out + '.map', { force: true });
