@@ -22,12 +22,7 @@ import {
 } from './spectrumProvision';
 
 /**
- * Promise that rejects after `ms` with `Error(message)`. Used to race against
- * best-effort network calls so the credential save never hangs longer than the
- * n8n credential UI can wait. Goes through `globalThis.setTimeout` with an
- * inline lint suppression because community-node lint forbids both the global
- * and `node:timers/promises`; the timeout is purely client-side and never
- * leaks to n8n Cloud's runtime contract.
+ * Promise that rejects after `ms`. Used to cap credential UI wait time.
  */
 function timeoutAfter(ms: number, message: string): Promise<never> {
 	return new Promise((_, reject) => {
@@ -44,13 +39,6 @@ const DEFAULT_RUNTIME = 'https://spectrum.photon.codes';
 const DEFAULT_SCOPE = 'openid profile email';
 const PENDING_SIGN_IN_TEST_MESSAGE =
 	'Still waiting for browser approval. Open the sign-in link above, confirm the approval code, then click Retry at the top (not Save).';
-/**
- * Sentinel value written to `bearerToken` when the user supplied projectId/secret
- * manually (no OAuth device-flow). Compared in other branches to distinguish a
- * real bearer from the manual-setup placeholder — extracted to a named constant
- * so a typo (`'manuall'`, `'manaul'`) silently breaking the branch shows up as a
- * compile error rather than a runtime regression.
- */
 const BEARER_MANUAL_SENTINEL = 'manual';
 // n8n RoutingNode evaluates $credentials BEFORE preAuthentication runs, so we cannot
 // reliably branch on bearerToken vs projectSecret here. The expression also cannot
@@ -573,11 +561,6 @@ async function runPreAuthentication(
 		const hasConnectedSecret =
 			!!projectIdInput && !!projectSecretInput && looksLikeSpectrumSecret;
 
-		// FAST PATH: a stored, healthy projectId+projectSecret is already enough to
-		// authenticate against Spectrum at runtime. n8n invokes preAuthentication on
-		// every request when bearerToken is expirable; we must NOT touch dashboard
-		// state here or any transient failure (network, rate limit, refresh latency)
-		// will wipe a working credential and break running workflows.
 		if (hasConnectedSecret) {
 			const base: IDataObject = {
 				projectId: projectIdInput,
@@ -592,11 +575,6 @@ async function runPreAuthentication(
 				userCode: '',
 			};
 
-			// Best-effort line provisioning + enrichment so the credential UI shows
-			// the assigned number / shared-pool status. Any failure here (network,
-			// slow API, etc.) must not wipe the working credential — we just skip
-			// the UI fields. We provision (idempotent on the Photon side) before
-			// reading so the very first Save assigns a line when possible.
 			const apiHost = trimHost(credentials.apiHost, DEFAULT_RUNTIME);
 			const yourPhone = ((credentials.yourPhoneNumber as string) || '').trim();
 			try {
@@ -615,7 +593,6 @@ async function runPreAuthentication(
 						'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
 					);
 				}
-				// Non-fatal: line will surface on next reopen when API is healthy.
 			}
 			try {
 				const lines = await Promise.race([
@@ -628,23 +605,15 @@ async function runPreAuthentication(
 				base.primaryLineNumber = lines.primaryLineNumber;
 				base.lineStatus = buildLineStatus(lines, yourPhone);
 			} catch {
-				// lineInfoFields swallows API errors and returns a fallback string;
-				// auth failures are already surfaced by provisionSpectrumProject above.
-				// Only Promise.race timeouts reach here — non-fatal.
+				// skip line UI on timeout
 			}
 
 			return withConnectionState(base, 'connected');
 		}
 
-		// Note: the fast path above already returns for any `hasConnectedSecret`
-		// case (manual or browser-flow). Code below this point only runs when
-		// the credential is *not yet* fully connected — either pending the
-		// device-flow approval, mid-`mintFromBearer`, or starting a fresh flow.
-
 		const deviceCode = ((credentials.deviceCode as string) || '').trim();
 		const expiresAt = Number(credentials.deviceCodeExpiresAt ?? 0);
 		if (deviceCode && expiresAt > Date.now()) {
-			// One token check per Save/Retry — never block "Testing…" while waiting in the browser.
 			const polled = await pollDeviceToken(
 				helper,
 				dashboardHost,
@@ -672,8 +641,6 @@ async function runPreAuthentication(
 					setupMethod: 'browser',
 					manualFallback: false,
 				};
-				// Provision iMessage + shared user inline so the user sees their assigned
-				// pool number on the *same* Retry click instead of needing a second reopen.
 				const yourPhone =
 					((credentials.yourPhoneNumber as string) || '').trim();
 				try {
@@ -707,7 +674,6 @@ async function runPreAuthentication(
 							'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
 						);
 					}
-					// Non-fatal — runtime still works; next reopen refreshes the line UI.
 				}
 				return connectedState(base);
 			}
@@ -732,7 +698,6 @@ async function runPreAuthentication(
 			);
 		}
 
-		// Browser sign-in whenever not fully connected (handles stale projectId-only creds).
 		return startPendingDeviceFlow(helper, dashboardHost, clientId);
 }
 

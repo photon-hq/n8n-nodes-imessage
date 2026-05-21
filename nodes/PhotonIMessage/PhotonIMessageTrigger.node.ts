@@ -134,12 +134,6 @@ interface StoredWebhook {
 	webhookUrl: string;
 }
 
-// `usableAsTool` is intentionally omitted on this trigger. Webhook triggers
-// have no `execute()` method — only `webhook()` — so an LLM agent's tool
-// runtime cannot invoke them. n8n-workflow types only accept
-// `true | UsableAsToolDescription | undefined`, so omission (≈ `undefined`)
-// is the most accurate expression. The community-nodes lint rule that flags
-// this is authored for executable nodes; suppress it locally.
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
 export class PhotonIMessageTrigger implements INodeType {
 	description: INodeTypeDescription = {
@@ -159,10 +153,6 @@ export class PhotonIMessageTrigger implements INodeType {
 				httpMethod: 'POST',
 				responseMode: 'onReceived',
 				path: 'webhook',
-				// Instruct n8n's body-parser to preserve the raw bytes before
-				// JSON deserialisation — required for HMAC-SHA256 verification.
-				// The defensive readRawBody() call in webhook() remains as a
-				// secondary safeguard on older hosts.
 				rawBody: true,
 			},
 		],
@@ -276,19 +266,11 @@ export class PhotonIMessageTrigger implements INodeType {
 			readRawBody?: () => Promise<void>;
 		};
 
-		// HMAC verification requires the exact bytes Spectrum signed. n8n's
-		// global body-parser middleware reads the raw body for JSON content
-		// types before this handler runs, so `req.rawBody` is normally already
-		// populated. We still defensively await `readRawBody()` if it's
-		// available — older n8n versions and some proxy configurations skip
-		// the eager read, and JSON.stringify(req.body) would produce a
-		// different byte sequence from what Spectrum signed.
 		if (!req.rawBody && typeof req.readRawBody === 'function') {
 			try {
 				await req.readRawBody();
 			} catch {
-				// Fall through — verification will fail loudly below if rawBody
-				// is missing, which is the right outcome.
+				// ignore
 			}
 		}
 		const rawBody = (req.rawBody ?? '').toString();
@@ -318,10 +300,6 @@ export class PhotonIMessageTrigger implements INodeType {
 		});
 
 		if (!verification.ok) {
-			// n8n returns this string to Spectrum as the HTTP 200 body, but the
-			// workflow never fires. Without a log entry the user sees silence,
-			// so emit a warning into the workflow execution log so the misconfig
-			// surfaces in the n8n UI.
 			this.logger.warn(
 				`[iMessage by Photon Trigger] Spectrum webhook signature verification failed: ${verification.reason}. ` +
 					'Webhook ignored. This usually means the registered signing secret no longer matches the active webhook — re-activate the trigger to rotate it.',

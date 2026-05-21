@@ -1081,10 +1081,6 @@ async function runOne(
 			const messageId = ctx.getNodeParameter('lookupMessageId', i) as string;
 			const recipients = splitAddresses(recipientsRaw);
 			const space = await resolveSpace(im, recipients, fromPhone);
-			// Spectrum throws on unknown message ids (never returns `undefined`),
-			// so the raw error bubbles out as a `NodeApiError` with the SDK's
-			// internal string. Catch the 404 explicitly to surface a clear,
-			// actionable message that mentions the id the user typed.
 			let msg: (Awaited<ReturnType<typeof space.getMessage>> & {
 				id: string;
 				platform?: string;

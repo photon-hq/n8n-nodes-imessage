@@ -30,14 +30,8 @@ const entryPoints = [
 ];
 
 /**
- * esbuild plugin that rewrites `spectrumClient.ts` so the bundler sees the
- * spectrum-ts imports as static ESM dynamic imports. Without this, the eval
- * strings remain as runtime lookups and spectrum-ts is never inlined.
- *
- * Each rewrite is tracked independently — a partial match (e.g. only the
- * `spectrum-ts` import substituted but not its `providers/imessage` subpath)
- * would otherwise pass the loose `rewritten !== original` check and ship a
- * broken artifact with one live `eval()` call esbuild can never reach.
+ * Rewrites spectrumClient.ts eval markers into static imports for esbuild.
+ * Both rewrites must match or the build fails.
  */
 const spectrumImportPlugin = {
 	name: 'spectrum-import-rewrite',
@@ -82,11 +76,6 @@ async function bundle({ src, out }) {
 		conditions: ['import', 'node', 'default'],
 		sourcemap: false,
 		logLevel: 'warning',
-		// Preserve `/*! … */` legal comments at end-of-file so any
-		// attribution / license notices from bundled-in dependencies survive
-		// the post-build. spectrum-ts and its transitive deps are MIT today,
-		// but `eof` is the conservative choice if any future dep drops in an
-		// Apache-2 NOTICE or similar attribution requirement.
 		legalComments: 'eof',
 		plugins: [spectrumImportPlugin],
 	});

@@ -81,11 +81,6 @@ function tryOpen(url) {
 				detached: true,
 				shell: platform === 'win32',
 			});
-			// spawn() can fail asynchronously (e.g. ENOENT when `open`/`xdg-open`
-			// is missing). A sync try/catch never sees those — listen for 'error'.
-			// Use a short delay before resolving true so the I/O error event has
-			// time to fire; nextTick always wins the race and makes the listener
-			// dead code.
 			child.once('error', () => finish(false));
 			child.unref();
 			setTimeout(() => finish(true), 50);

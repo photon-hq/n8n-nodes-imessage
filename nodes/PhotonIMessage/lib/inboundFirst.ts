@@ -13,16 +13,6 @@ function normalize(address: string): string {
 	return address.trim().toLowerCase();
 }
 
-// Cross-execution allowlist of senders. Stored in the workflow's `global`
-// static data so the Trigger and Action nodes share it within a workflow.
-//
-// TOCTOU note: `getWorkflowStaticData('global')` returns a per-execution view
-// that n8n flushes back to storage at execution boundaries. Two executions
-// that overlap may each read a store that doesn't yet contain a sender just
-// recorded by the other — for iMessage this is practically a non-issue
-// (a contact's trigger fires sequentially with its reply), and n8n's
-// architecture provides no cross-execution lock primitive, so we accept the
-// race rather than paper over it with a mechanism that can't be made correct.
 function loadStore(
 	ctx: IExecuteFunctions | IWebhookFunctions,
 ): AllowlistStore {
@@ -34,9 +24,6 @@ function loadStore(
 	return fresh;
 }
 
-// One-time seed of the credential's pre-approved list. Repeating the iteration
-// + writes on every outbound is redundant once we've persisted the entries;
-// guard with a fingerprint of the input string so credential edits re-seed.
 function seedPreApproved(
 	ctx: IExecuteFunctions,
 	store: AllowlistStore,
