@@ -1,15 +1,8 @@
 import type { IHttpRequestHelper } from 'n8n-workflow';
 
+import type { IMessageInfoData, SpectrumEnvelope } from './spectrumTypes';
+
 const HTTP_TIMEOUT_MS = 20_000;
-
-interface SpectrumEnvelope<T> {
-	succeed?: boolean;
-	data: T;
-}
-
-interface IMessageInfoData {
-	type: 'shared' | 'dedicated';
-}
 
 interface SharedUser {
 	phoneNumber?: string;

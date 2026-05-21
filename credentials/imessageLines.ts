@@ -1,5 +1,7 @@
 import type { IHttpRequestHelper } from 'n8n-workflow';
 
+import type { IMessageInfoData, SpectrumEnvelope } from './spectrumTypes';
+
 const HTTP_TIMEOUT_MS = 20_000;
 
 /** Result of Spectrum project line lookup for the credential form. */
@@ -9,15 +11,6 @@ export interface IMessageLineInfo {
 	imessageLines: string;
 	/** E.164 line end users text to reach this project (first match). */
 	primaryLineNumber: string;
-}
-
-interface SpectrumEnvelope<T> {
-	succeed?: boolean;
-	data: T;
-}
-
-interface IMessageInfoData {
-	type: 'shared' | 'dedicated';
 }
 
 interface DedicatedLine {
