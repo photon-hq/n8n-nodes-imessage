@@ -10,6 +10,7 @@ import type {
 } from 'n8n-workflow';
 
 import { buildLineStatus, lineInfoFields } from './imessageLines';
+import { isAuthError } from './httpErrors';
 import {
 	formatProjectList,
 	pickExistingProject,
@@ -33,13 +34,6 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
 		// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals
 		setTimeout(() => reject(new Error(message)), ms);
 	});
-}
-
-function isAuthError(err: unknown): boolean {
-	const status =
-		(err as { httpCode?: number; statusCode?: number }).httpCode ??
-		(err as { statusCode?: number }).statusCode;
-	return status === 401 || status === 403;
 }
 
 // `photon-cli` is the only client id currently allowlisted by Spectrum's
@@ -633,13 +627,10 @@ async function runPreAuthentication(
 				base.imessageLines = lines.imessageLines;
 				base.primaryLineNumber = lines.primaryLineNumber;
 				base.lineStatus = buildLineStatus(lines, yourPhone);
-			} catch (err) {
-				if (isAuthError(err)) {
-					throw new Error(
-						'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
-					);
-				}
-				// Keep going — runtime auth still works with just projectId+secret.
+			} catch {
+				// lineInfoFields swallows API errors and returns a fallback string;
+				// auth failures are already surfaced by provisionSpectrumProject above.
+				// Only Promise.race timeouts reach here — non-fatal.
 			}
 
 			return withConnectionState(base, 'connected');
@@ -742,16 +733,6 @@ async function runPreAuthentication(
 		}
 
 		// Browser sign-in whenever not fully connected (handles stale projectId-only creds).
-		if (!manual && !hasConnectedSecret) {
-			return startPendingDeviceFlow(helper, dashboardHost, clientId);
-		}
-
-		// The `(bearer && bearer !== BEARER_MANUAL_SENTINEL && hasConnectedSecret)`
-		// rehydration branch that used to live here was unreachable — the fast
-		// path at the top returns for every `hasConnectedSecret` case. If you
-		// need to add a true bearer-rehydration path in the future (e.g. cached
-		// bearer but missing projectId), gate it on `!hasConnectedSecret`.
-
 		return startPendingDeviceFlow(helper, dashboardHost, clientId);
 }
 
