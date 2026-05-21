@@ -182,7 +182,12 @@ export async function getSession(
 		return { user: { id, email: rawUser.email, name: rawUser.name } };
 	} catch (err) {
 		if (err instanceof DeviceAuthError && err.status === 401) return null;
-		throw err;
+		const message = err instanceof Error ? err.message : String(err);
+		// This module is loaded by the CLI binary (no n8n context). Re-throwing as
+		// the file's own typed error class is correct here; NodeApiError would
+		// require an n8n IExecuteFunctions which we do not have at the CLI layer.
+		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
+		throw new DeviceAuthError(message, 0, null);
 	}
 }
 
