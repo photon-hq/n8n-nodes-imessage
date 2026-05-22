@@ -6,11 +6,6 @@ import type { IMessageInfoData, SpectrumEnvelope } from './spectrumTypes';
 
 const HTTP_TIMEOUT_MS = 20_000;
 
-interface SharedUser {
-	phoneNumber?: string;
-	assignedPhoneNumber?: string;
-}
-
 async function spectrumRequest<T>(
 	_helper: IHttpRequestHelper,
 	apiHost: string,
@@ -42,12 +37,8 @@ async function spectrumRequest<T>(
 	return raw as T;
 }
 
-function normalizePhone(phone: string): string {
-	return phone.trim().replace(/[\s().-]/g, '');
-}
-
-/** Enable iMessage on the Spectrum project (runtime API, same as codex). */
-export async function enableImessagePlatform(
+/** Enable iMessage on the Spectrum project. */
+async function enableImessagePlatform(
 	helper: IHttpRequestHelper,
 	apiHost: string,
 	projectId: string,
@@ -64,88 +55,16 @@ export async function enableImessagePlatform(
 	);
 }
 
-/** Create a shared-pool user; Spectrum assigns `assignedPhoneNumber`. */
-export async function ensureSharedUser(
-	helper: IHttpRequestHelper,
-	apiHost: string,
-	projectId: string,
-	projectSecret: string,
-	contactPhone: string,
-): Promise<string | undefined> {
-	const phone = normalizePhone(contactPhone);
-	if (!phone) return undefined;
-
-	const usersData = await spectrumRequest<{ users: SharedUser[] }>(
-		helper,
-		apiHost,
-		projectId,
-		projectSecret,
-		'GET',
-		'/users/?type=shared',
-	);
-	const users = usersData.users ?? [];
-	const existing = users.find(
-		(u) => u.phoneNumber && normalizePhone(u.phoneNumber) === phone,
-	);
-	if (existing?.assignedPhoneNumber) {
-		return existing.assignedPhoneNumber;
-	}
-
-	const created = await spectrumRequest<SharedUser>(
-		helper,
-		apiHost,
-		projectId,
-		projectSecret,
-		'POST',
-		'/users/',
-		{ type: 'shared', phoneNumber: phone },
-	);
-	return created.assignedPhoneNumber;
-}
-
-export async function createDashboardProject(
-	_helper: IHttpRequestHelper,
-	dashboardHost: string,
-	bearer: string,
-	name: string,
-): Promise<string> {
-	const host = dashboardHost.replace(/\/+$/, '');
-	const body = await photonHttpsJson<{ id?: string }>(`${host}/api/projects`, {
-		method: 'POST',
-		headers: {
-			authorization: `Bearer ${bearer}`,
-			'content-type': 'application/json',
-		},
-		body: {
-			name: name || 'n8n iMessage',
-			location: 'United States',
-			spectrum: true,
-			template: false,
-			observability: false,
-		},
-		timeout: HTTP_TIMEOUT_MS,
-	});
-	if (!body?.id) {
-		throw new Error('Photon dashboard did not return a project id when creating a project.');
-	}
-	return body.id;
-}
-
-/**
- * Turns on iMessage for the project and, on shared plans, registers the contact
- * phone so Spectrum can assign a line (codex-style provisioning).
- */
+/** Ensures iMessage is enabled on the Spectrum project. Line assignment is done on the dashboard. */
 export async function provisionSpectrumProject(
 	helper: IHttpRequestHelper,
 	opts: {
 		apiHost: string;
 		projectId: string;
 		projectSecret: string;
-		contactPhone?: string;
 	},
-): Promise<{ assignedPhone?: string; mode: 'shared' | 'dedicated' | '' }> {
+): Promise<{ mode: 'shared' | 'dedicated' | '' }> {
 	const { apiHost, projectId, projectSecret } = opts;
-	const contactPhone = (opts.contactPhone ?? '').trim();
 
 	await enableImessagePlatform(helper, apiHost, projectId, projectSecret);
 
@@ -158,20 +77,7 @@ export async function provisionSpectrumProject(
 		'/imessage/',
 	);
 
-	if (info.type === 'dedicated') {
-		return { mode: 'dedicated' };
-	}
-
-	if (!contactPhone) {
-		return { mode: 'shared' };
-	}
-
-	const assignedPhone = await ensureSharedUser(
-		helper,
-		apiHost,
-		projectId,
-		projectSecret,
-		contactPhone,
-	);
-	return { assignedPhone, mode: 'shared' };
+	if (info.type === 'dedicated') return { mode: 'dedicated' };
+	if (info.type === 'shared') return { mode: 'shared' };
+	return { mode: '' };
 }

@@ -101,7 +101,6 @@ export async function fetchIMessageLineInfo(
 	apiHost: string,
 	projectId: string,
 	projectSecret: string,
-	contactPhone?: string,
 ): Promise<IMessageLineInfo> {
 	const info = await spectrumGet<IMessageInfoData>(
 		helper,
@@ -138,32 +137,21 @@ export async function fetchIMessageLineInfo(
 	);
 	const users = usersData.users ?? [];
 	const withLine = users.filter((u) => u.assignedPhoneNumber);
-	const prefer = contactPhone
-		? withLine.find(
-				(u) =>
-					u.phoneNumber &&
-					u.phoneNumber.replace(/\s+/g, '') === contactPhone.replace(/\s+/g, ''),
-			)
-		: undefined;
 	return {
 		mode: 'shared',
 		lineModeLabel: 'Shared pool (per-contact lines)',
 		imessageLines: formatSharedUsers(users),
-		primaryLineNumber:
-			prefer?.assignedPhoneNumber ?? withLine[0]?.assignedPhoneNumber ?? '',
+		primaryLineNumber: withLine[0]?.assignedPhoneNumber ?? '',
 	};
 }
 
 /** Short status copy for the credential form (no expressions). */
-export function buildLineStatus(
-	lines: {
-		lineMode: string;
-		lineModeLabel: string;
-		imessageLines: string;
-		primaryLineNumber: string;
-	},
-	yourPhone: string,
-): string {
+export function buildLineStatus(lines: {
+	lineMode: string;
+	lineModeLabel: string;
+	imessageLines: string;
+	primaryLineNumber: string;
+}): string {
 	if (lines.primaryLineNumber) {
 		const extra =
 			lines.imessageLines &&
@@ -173,13 +161,8 @@ export function buildLineStatus(
 				: '';
 		return `${lines.lineModeLabel}${extra}`;
 	}
-	if (lines.lineMode === 'shared') {
-		return yourPhone
-			? 'No line assigned yet for this mobile — click Save again after saving your number.'
-			: 'Shared plan: enter your mobile below, Save, then Save again to get your iMessage line.';
-	}
 	if (lines.imessageLines) return lines.imessageLines;
-	return 'Click Save again to load your project line from Spectrum.';
+	return 'No iMessage line on this project yet. Add lines or shared users on app.photon.codes, then Save again.';
 }
 
 export async function lineInfoFields(
@@ -187,7 +170,6 @@ export async function lineInfoFields(
 	apiHost: string,
 	projectId: string,
 	projectSecret: string,
-	contactPhone?: string,
 ): Promise<{
 	lineMode: string;
 	lineModeLabel: string;
@@ -195,13 +177,7 @@ export async function lineInfoFields(
 	primaryLineNumber: string;
 }> {
 	try {
-		const info = await fetchIMessageLineInfo(
-			helper,
-			apiHost,
-			projectId,
-			projectSecret,
-			contactPhone,
-		);
+		const info = await fetchIMessageLineInfo(helper, apiHost, projectId, projectSecret);
 		return {
 			lineMode: info.mode,
 			lineModeLabel: info.lineModeLabel,
