@@ -30,12 +30,14 @@ Create a **Photon iMessage** credential in n8n. Most users only use browser sign
 
 ### Sign in with Photon (default)
 
-1. Click **Save** on a new credential.
-2. On the next screen, open **Approval Link**, confirm **Approval Code** in the browser.
-3. Click **Retry** at the top of the panel (not Save again).
-4. **Your iMessage Line** appears when Spectrum has assigned a number.
+Two steps:
 
-Optional: add **Your Mobile (E.164)** before the first Save on shared plans so your line is provisioned on the first Retry.
+1. Enter **Your iPhone Number** (E.164, e.g. `+14155550123`) and click **Save**.
+2. Open the **Sign-in link**, approve in your browser, then click **Save** again. If the link is blank, close and reopen the credential panel once.
+
+**Your iMessage Line** appears when connected. On the second Save, n8n waits up to ~25 seconds for browser approval.
+
+**Next:** add **iMessage by Photon Trigger** → toggle the workflow **Active** → iMessage your assigned line from your iPhone.
 
 **Projects:** we bind to an existing Photon project when possible (`n8n…` name, single Spectrum project, or the project from a previous connect). Enable **Show Project Options → Create project if none exists** only if your account has zero projects and you want one created automatically.
 
@@ -58,7 +60,7 @@ Paste the printed credentials under **Troubleshooting**. Flags: `--api-host`, `-
 | Field | Description |
 |---|---|
 | Your iMessage Line | Number people text to trigger workflows. |
-| Your Mobile (E.164) | Shared plans — assign or refresh your line, then Retry. |
+| Your Mobile (E.164) | Shared plans — assign or refresh your line, then Save. |
 | Show Technical Details | Reveals Project ID for dashboard support. |
 
 ## Action node
@@ -117,6 +119,33 @@ On Business plans with dedicated phone lines, every operation that touches a Spa
 ## Trigger node
 
 When you activate the Trigger, n8n calls Spectrum to register the node's webhook URL and store a fresh 64-char signing secret. Spectrum signs each delivery with HMAC-SHA256; verification is built in.
+
+### Webhook URL: Cloud vs self-hosted
+
+Spectrum runs in the cloud and **cannot POST to `localhost`**. The webhook URL n8n registers must be reachable from the internet.
+
+| Deployment | What to do |
+|---|---|
+| **n8n Cloud** | Nothing — n8n uses your cloud instance URL automatically. Toggle the workflow **Active**. |
+| **Self-hosted (local machine)** | Expose n8n with a public HTTPS URL before activating the trigger. |
+| **Self-hosted (server with public domain)** | Set `WEBHOOK_URL=https://your-domain` when starting n8n. |
+
+**Local development** (recommended):
+
+```bash
+# From this repo — starts ngrok, sets WEBHOOK_URL, runs n8n-node dev
+npm run dev:tunnel
+```
+
+Or manually:
+
+```bash
+ngrok http 5678
+# Then start n8n with:
+WEBHOOK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app n8n start
+```
+
+After the tunnel or `WEBHOOK_URL` is in place, toggle the workflow **Active** (or **Test this trigger**). If you restart ngrok, toggle Active off/on so Spectrum gets the new URL.
 
 Filters:
 

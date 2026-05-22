@@ -14,7 +14,7 @@ interface PhotonRequestOptions {
 	ignoreHttpStatusErrors?: boolean;
 }
 
-/** HTTPS JSON via IPv4 (avoids broken IPv6 paths to Cloudflare on some networks). */
+/** HTTPS JSON via IPv4. */
 export async function photonHttpsJson<T>(
 	urlString: string,
 	options: PhotonRequestOptions = {},

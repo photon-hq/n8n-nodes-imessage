@@ -9,7 +9,8 @@ import type {
 import { NodeConnectionTypes } from 'n8n-workflow';
 
 import { getSpectrumCredentials } from './lib/credentials';
-import { getSpectrumHeader, isDevTunnelWebhookUrl } from './lib/spectrumHeaders';
+import { getSpectrumHeader } from './lib/spectrumHeaders';
+import { assertPublicWebhookUrl, isDevTunnelWebhookUrl, isLocalWebhookUrl } from './lib/webhookUrl';
 import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks, registerWebhook } from './lib/webhookApi';
 import type { WebhookRegistration } from './lib/types';
@@ -140,8 +141,33 @@ function shouldDeleteRemoteWebhook(
 ): boolean {
 	if (w.webhookUrl === webhookUrl) return true;
 	if (nodeWebhookId && w.webhookUrl.includes(`/${nodeWebhookId}/`)) return true;
+	if (isLocalWebhookUrl(w.webhookUrl)) return true;
 	if (isDevTunnelWebhookUrl(w.webhookUrl)) return true;
 	return false;
+}
+
+function webhookFailureMessage(
+	reason:
+		| 'not-registered'
+		| 'missing-body'
+		| 'unknown-webhook-id'
+		| 'missing-headers'
+		| 'stale-timestamp'
+		| 'bad-signature',
+): string {
+	switch (reason) {
+		case 'not-registered':
+			return 'not listening — click Test this trigger or activate the workflow';
+		case 'missing-body':
+			return 'empty request body — check your reverse proxy is forwarding POST bodies';
+		case 'unknown-webhook-id':
+		case 'bad-signature':
+			return 'stale webhook — toggle Active off/on, or click Test this trigger again';
+		case 'missing-headers':
+			return 'missing Spectrum signature headers';
+		case 'stale-timestamp':
+			return 'webhook timestamp too old — check server clock or retry';
+	}
 }
 
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
@@ -152,7 +178,8 @@ export class PhotonIMessageTrigger implements INodeType {
 		icon: 'file:Dark.svg',
 		group: ['trigger'],
 		version: 1,
-		subtitle: '={{ ($parameter["contentTypes"] || []).join(", ") || "all events" }}',
+		subtitle:
+			'={{ $credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential" }}',
 		description: 'Triggers on real-time iMessage events via Spectrum-managed webhooks',
 		defaults: { name: 'On iMessage Event' },
 		inputs: [],
@@ -175,15 +202,11 @@ export class PhotonIMessageTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'<b>Test mode:</b> one message per <b>Test this trigger</b> click (n8n limit). <b>Production:</b> toggle <b>Active</b> for a persistent webhook. After restarting <code>dev:tunnel</code>, re-test or toggle Active off/on.',
+					'<b>n8n Cloud:</b> your instance URL is used automatically — toggle workflow <b>Active</b>. ' +
+					'<b>Self-hosted on this machine:</b> localhost will not work; Spectrum must reach a public URL. ' +
+					'Dev: <code>npm run dev:tunnel</code> (ngrok + WEBHOOK_URL). Production: set <code>WEBHOOK_URL=https://your-domain</code> when starting n8n. ' +
+					'Then toggle <b>Active</b> or <b>Test this trigger</b>. Test mode: one message per Test click.',
 				name: 'webhookModeNotice',
-				type: 'notice',
-				default: '',
-			},
-			{
-				displayName:
-					'Registered webhooks show on app.photon.codes under the <b>Photon dashboard project</b> from your credential (usually <b>n8n iMessage</b> — not codex or other projects). Spectrum signs each delivery with HMAC-SHA256 — verification is automatic (<a href="https://docs.photon.codes/webhooks/overview" target="_blank">docs</a>).',
-				name: 'setupNotice',
 				type: 'notice',
 				default: '',
 			},
@@ -192,9 +215,9 @@ export class PhotonIMessageTrigger implements INodeType {
 				name: 'contentTypes',
 				type: 'multiOptions',
 				options: CONTENT_TYPE_OPTIONS,
-				default: ['*'],
+				default: ['text'],
 				description:
-					'Filter inbound webhook payloads. Today Spectrum delivers Text and Attachment (Photo/Voice/Video/Document). The remaining variants are reserved for forward compatibility — when Spectrum starts emitting them, this trigger will route them too without a node update. See https://docs.photon.codes/webhooks/events.',
+					'Filter inbound messages. Spectrum today delivers text and attachments; other types are reserved for forward compatibility.',
 			},
 			{
 				displayName: 'Filters',
@@ -236,6 +259,7 @@ export class PhotonIMessageTrigger implements INodeType {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
 				const webhookUrl = this.getNodeWebhookUrl('default');
 				if (!webhookUrl) return false;
+				if (isLocalWebhookUrl(webhookUrl)) return false;
 
 				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
 				const stored = staticData.webhook as StoredWebhook | undefined;
@@ -256,6 +280,8 @@ export class PhotonIMessageTrigger implements INodeType {
 			async create(this: IHookFunctions): Promise<boolean> {
 				const webhookUrl = this.getNodeWebhookUrl('default');
 				if (!webhookUrl) return false;
+
+				assertPublicWebhookUrl(this.getNode(), webhookUrl);
 
 				const creds = await getSpectrumCredentials(this);
 				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
@@ -338,14 +364,14 @@ export class PhotonIMessageTrigger implements INodeType {
 
 		if (!stored?.signingSecret) {
 			return {
-				webhookResponse: 'webhook is not registered',
+				webhookResponse: webhookFailureMessage('not-registered'),
 				noWebhookResponse: false,
 			};
 		}
 
 		if (!rawBody) {
 			return {
-				webhookResponse: 'signature verification failed: missing-body',
+				webhookResponse: webhookFailureMessage('missing-body'),
 				noWebhookResponse: false,
 			};
 		}
@@ -353,7 +379,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		const signingSecret = resolveSigningSecret(stored, webhookIdHeader);
 		if (!signingSecret) {
 			return {
-				webhookResponse: 'signature verification failed: unknown-webhook-id',
+				webhookResponse: webhookFailureMessage('unknown-webhook-id'),
 				noWebhookResponse: false,
 			};
 		}
@@ -370,7 +396,7 @@ export class PhotonIMessageTrigger implements INodeType {
 				`[iMessage by Photon Trigger] Signature verification failed (${verification.reason})`,
 			);
 			return {
-				webhookResponse: `signature verification failed: ${verification.reason}`,
+				webhookResponse: webhookFailureMessage(verification.reason),
 				noWebhookResponse: false,
 			};
 		}

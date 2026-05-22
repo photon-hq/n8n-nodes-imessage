@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/** Local dev with public webhook URL (ngrok preferred, cloudflared fallback). */
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -87,7 +86,6 @@ async function waitForN8nLocal() {
 	throw new Error(`n8n did not become ready on port ${N8N_PORT} within ${TUNNEL_TIMEOUT_MS / 1000}s`);
 }
 
-/** n8n returns JSON/HTML; dead trycloudflare tunnels return empty 404. */
 async function verifyTunnelForwards(publicUrl) {
 	const res = await fetch(`${publicUrl}/healthz`, { signal: AbortSignal.timeout(12_000) });
 	const body = await res.text();

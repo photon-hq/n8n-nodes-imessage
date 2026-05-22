@@ -21,13 +21,17 @@ import {
 	provisionSpectrumProject,
 } from './spectrumProvision';
 
-/**
- * Promise that rejects after `ms`. Used to cap credential UI wait time.
- */
 function timeoutAfter(ms: number, message: string): Promise<never> {
 	return new Promise((_, reject) => {
 		// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals
 		setTimeout(() => reject(new Error(message)), ms);
+	});
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals
+		setTimeout(resolve, ms);
 	});
 }
 
@@ -38,7 +42,7 @@ const DEFAULT_DASHBOARD = 'https://app.photon.codes';
 const DEFAULT_RUNTIME = 'https://spectrum.photon.codes';
 const DEFAULT_SCOPE = 'openid profile email';
 const PENDING_SIGN_IN_TEST_MESSAGE =
-	'Still waiting for browser approval. Open the sign-in link above, confirm the approval code, then click Save again to finish connecting.';
+	'Still waiting for browser approval. Open the sign-in link, approve in your browser, then click Save again.';
 const BEARER_MANUAL_SENTINEL = 'manual';
 // n8n RoutingNode evaluates $credentials BEFORE preAuthentication runs, so we cannot
 // reliably branch on bearerToken vs projectSecret here. The expression also cannot
@@ -48,8 +52,9 @@ const BEARER_MANUAL_SENTINEL = 'manual';
 // the credential UI fields.
 const CREDENTIAL_TEST_URL = `${DEFAULT_DASHBOARD}/api/auth/ok`;
 const DEVICE_HTTP_TIMEOUT_MS = 20_000;
+const DEVICE_POLL_MAX_MS = 25_000;
+const DEVICE_POLL_INTERVAL_MS = 2_000;
 
-/** Drives which fields n8n shows (set on every preAuthentication return). */
 type ConnectionState = 'setup' | 'pending' | 'connected';
 
 interface DeviceCodeResponse {
@@ -75,12 +80,7 @@ interface ProjectSummary {
 	id: string;
 	name?: string;
 	spectrum?: boolean;
-	// Spectrum runtime project id — different from the dashboard `id`. Nodes
-	// authenticate against Spectrum using this id, not the dashboard id.
 	spectrumProjectId?: string;
-	// Some dashboard responses include the current projectSecret inline, in which
-	// case we can skip the regenerate-secret call (which invalidates any other
-	// tool using the same project).
 	projectSecret?: string;
 }
 
@@ -196,58 +196,25 @@ export class PhotonSpectrumApi implements ICredentialType {
 		{ displayName: 'Connection State', name: 'connectionState', type: 'hidden', default: 'setup' },
 		{ displayName: 'Setup Method', name: 'setupMethod', type: 'hidden', default: 'browser' },
 
-		// ── Setup (device sign-in — default) ───────────────────────────────
 		{
 			displayName:
-				'<b>Step 1:</b> enter your iPhone number. <b>Step 2:</b> click <b>Save</b> — n8n auto-runs sign-in (spinner ~2–5s). <b>Step 3:</b> <b>close and reopen</b> this credential panel to see the sign-in link and approval code. <b>Step 4:</b> open the link, approve, then click <b>Save</b> again to finish connecting.',
+				'<b>Step 1 of 2:</b> Enter your iPhone number (E.164, e.g. +14155550123), then click <b>Save</b>.',
 			name: 'setupNotice',
 			type: 'notice',
 			default: '',
 			displayOptions: {
 				show: { connectionState: ['setup'] },
-				hide: {
-					manualFallback: [true],
-					verificationUrl: [{ _cnd: { not: '' } }],
-				},
-			},
-		},
-		{
-			displayName:
-				'Sign-in is in progress. If you just clicked Save, close this panel and open the credential again to refresh the link and code below.',
-			name: 'reloadHintNotice',
-			type: 'notice',
-			default: '',
-			displayOptions: {
-				show: { connectionState: ['setup'] },
-				hide: {
-					manualFallback: [true],
-					verificationUrl: [{ _cnd: { not: '' } }],
-				},
-			},
-		},
-		{
-			displayName:
-				'Open the sign-in link below in your browser. Confirm the approval code if prompted, then click <b>Save</b> again to finish connecting.',
-			name: 'pendingApprovalNotice',
-			type: 'notice',
-			default: '',
-			displayOptions: {
-				show: {
-					verificationUrl: [{ _cnd: { not: '' } }],
-				},
 				hide: { manualFallback: [true] },
 			},
 		},
 		{
 			displayName:
-				'Approved in the browser? Click <b>Save</b> again (top-right) to finish connecting and load your iMessage line.',
-			name: 'finishConnectNotice',
+				'<b>Step 2 of 2:</b> Open the <b>Sign-in link</b>, approve in your browser, then click <b>Save</b> again. If the link is blank, close and reopen this panel once.',
+			name: 'pendingNotice',
 			type: 'notice',
 			default: '',
 			displayOptions: {
-				show: {
-					verificationUrl: [{ _cnd: { not: '' } }],
-				},
+				show: { connectionState: ['pending'] },
 				hide: { manualFallback: [true] },
 			},
 		},
@@ -259,9 +226,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { editable: false },
 			description: 'Cmd+click (Mac) or copy and paste into your browser.',
 			displayOptions: {
-				show: {
-					verificationUrl: [{ _cnd: { not: '' } }],
-				},
+				show: { connectionState: ['pending'] },
 				hide: { manualFallback: [true] },
 			},
 		},
@@ -273,9 +238,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { editable: false },
 			description: 'Enter on the Photon sign-in page if it asks for a code.',
 			displayOptions: {
-				show: {
-					userCode: [{ _cnd: { not: '' } }],
-				},
+				show: { connectionState: ['pending'] },
 				hide: { manualFallback: [true] },
 			},
 		},
@@ -302,7 +265,6 @@ export class PhotonSpectrumApi implements ICredentialType {
 				'Fallback for CI, air-gapped n8n, or when browser sign-in fails. Paste credentials from app.photon.codes → Settings.',
 			displayOptions: {
 				show: { connectionState: ['setup'] },
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
 		{
@@ -315,9 +277,6 @@ export class PhotonSpectrumApi implements ICredentialType {
 				show: { connectionState: ['setup'], manualFallback: [true] },
 			},
 		},
-		// Manual-entry UI fields (only visible when user opts into the manual fallback).
-		// These mirror the hidden storage fields below — preAuthentication copies them
-		// into the canonical projectId/projectSecret so nodes always read the same keys.
 		{
 			displayName: 'Project ID',
 			name: 'manualProjectId',
@@ -340,9 +299,6 @@ export class PhotonSpectrumApi implements ICredentialType {
 				hide: { connectionState: ['pending', 'connected'] },
 			},
 		},
-		// Canonical storage — always serialized and passed to nodes regardless of
-		// connectionState. n8n's displayOptions filter the payload at execute time,
-		// so authoritative auth values must NOT be gated by show/hide.
 		{
 			displayName: 'Project ID (stored)',
 			name: 'projectId',
@@ -365,10 +321,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 				'Advanced. By default a new Photon project named "n8n iMessage" is created and isolated from your other tools. Enable this to change the project name or opt out of creation.',
 			displayOptions: {
 				show: { connectionState: ['setup'] },
-				hide: {
-					manualFallback: [true],
-					verificationUrl: [{ _cnd: { not: '' } }],
-				},
+				hide: { manualFallback: [true] },
 			},
 		},
 		{
@@ -404,12 +357,9 @@ export class PhotonSpectrumApi implements ICredentialType {
 			},
 		},
 
-		// ── Connected ───────────────────────────────────────────────────────
-		// Loud warning shown at top when connected but no iMessage line is assigned.
-		// Covers both "phone empty" and "phone entered but Spectrum hasn't assigned a number yet".
 		{
 			displayName:
-				'⚠ <b>No iMessage line assigned yet.</b> Enter your iPhone number in the field above (E.164 format, e.g. +15551234567), then click <b>Save</b> again. Photon will assign a pool number you can text from your iPhone.',
+				'No iMessage line yet. Enter your iPhone number above in E.164 format (+country code, e.g. +14155550123), then click <b>Save</b> again.',
 			name: 'noLineWarningNoPhone',
 			type: 'notice',
 			default: '',
@@ -420,13 +370,12 @@ export class PhotonSpectrumApi implements ICredentialType {
 				},
 				hide: {
 					primaryLineNumber: [{ _cnd: { not: '' } }],
-					verificationUrl: [{ _cnd: { not: '' } }],
 				},
 			},
 		},
 		{
 			displayName:
-				'⚠ <b>No iMessage line assigned yet.</b> Your phone number is saved but Spectrum hasn\'t returned a pool line. Click <b>Save</b> again — if it still doesn\'t appear, check your phone number is in E.164 (+CC...) format and try again.',
+				'Line not assigned yet. Check your phone number uses E.164 (+14155550123, not 415-555-0123), then click <b>Save</b> again. Still missing? Wait a few seconds and Save once more.',
 			name: 'noLineWarningWithPhone',
 			type: 'notice',
 			default: '',
@@ -435,27 +384,26 @@ export class PhotonSpectrumApi implements ICredentialType {
 				hide: {
 					yourPhoneNumber: [''],
 					primaryLineNumber: [{ _cnd: { not: '' } }],
-					verificationUrl: [{ _cnd: { not: '' } }],
 				},
 			},
 		},
 		{
 			displayName:
-				'You are connected. Triggers fire when anyone iMessages your project; use the action node to reply.',
+				'<b>Connected.</b> Next: add <b>iMessage by Photon Trigger</b> to a workflow → toggle the workflow <b>Active</b> → iMessage <b>Your iMessage Line</b> below from your iPhone. Use the action node to reply.',
 			name: 'connectedNotice',
 			type: 'notice',
 			default: '',
 			displayOptions: {
 				show: {
+					connectionState: ['connected'],
 					projectId: [{ _cnd: { not: '' } }],
 					primaryLineNumber: [{ _cnd: { not: '' } }],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
 		{
 			displayName:
-				'<b>Webhooks on the Photon dashboard</b> appear under the <b>Photon dashboard project</b> field below (app.photon.codes → switch to that project → Webhook tab). They are removed when you stop test listen or deactivate the workflow — an empty tab outside those moments is normal.',
+				'Webhooks on app.photon.codes use <b>Photon dashboard project</b> below. Self-hosted local n8n needs a public URL (ngrok / WEBHOOK_URL) — not localhost.',
 			name: 'webhookDashboardNotice',
 			type: 'notice',
 			default: '',
@@ -464,7 +412,6 @@ export class PhotonSpectrumApi implements ICredentialType {
 					connectionState: ['connected'],
 					projectId: [{ _cnd: { not: '' } }],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
 		{
@@ -480,10 +427,8 @@ export class PhotonSpectrumApi implements ICredentialType {
 					connectionState: ['connected'],
 					dashboardProjectName: [{ _cnd: { not: '' } }],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
-		// The assigned iMessage line — shown for both dedicated and shared plans.
 		{
 			displayName: 'Your iMessage Line',
 			name: 'primaryLineNumber',
@@ -493,16 +438,15 @@ export class PhotonSpectrumApi implements ICredentialType {
 			description: 'The number people iMessage to reach this n8n project.',
 			displayOptions: {
 				show: {
+					connectionState: ['connected'],
 					projectId: [{ _cnd: { not: '' } }],
 					primaryLineNumber: [{ _cnd: { not: '' } }],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
-		// Shared pool with an assigned line — tell the user what to do with it.
 		{
 			displayName:
-				'<b>To test:</b> send an iMessage to <b>Your iMessage Line</b> above from your iPhone — your trigger fires immediately. To onboard more end users, add them on app.photon.codes (each gets their own pool number) or share a deep link <code>https://spectrum.photon.codes/users/{userId}/redirect</code> that opens iMessage pre-filled.',
+				'Shared pool: text <b>Your iMessage Line</b> from the iPhone number you registered. Add more users on app.photon.codes.',
 			name: 'sharedPoolHowTo',
 			type: 'notice',
 			default: '',
@@ -512,10 +456,8 @@ export class PhotonSpectrumApi implements ICredentialType {
 					lineMode: ['shared'],
 					primaryLineNumber: [{ _cnd: { not: '' } }],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
-		// Per-contact assigned numbers (populated when you have shared users with lines).
 		{
 			displayName: 'Assigned shared-pool lines',
 			name: 'imessageLines',
@@ -529,7 +471,6 @@ export class PhotonSpectrumApi implements ICredentialType {
 					connectionState: ['connected'],
 					imessageLines: [{ _cnd: { not: '' } }],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
 		{
@@ -540,10 +481,10 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { editable: false },
 			displayOptions: {
 				show: {
+					connectionState: ['connected'],
 					lineStatus: [{ _cnd: { not: '' } }],
 				},
 				hide: {
-					verificationUrl: [{ _cnd: { not: '' } }],
 					primaryLineNumber: [{ _cnd: { not: '' } }],
 				},
 			},
@@ -555,8 +496,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			default: false,
 			description: 'Project ID for support and dashboard cross-reference.',
 			displayOptions: {
-				show: { projectId: [{ _cnd: { not: '' } }] },
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
+				show: { connectionState: ['connected'], projectId: [{ _cnd: { not: '' } }] },
 			},
 		},
 		{
@@ -567,14 +507,13 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { editable: false },
 			displayOptions: {
 				show: {
+					connectionState: ['connected'],
 					projectId: [{ _cnd: { not: '' } }],
 					showTechnicalDetails: [true],
 				},
-				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
 		},
 
-		// ── Hidden state ────────────────────────────────────────────────────
 		{ displayName: 'Dashboard project ID', name: 'dashboardProjectId', type: 'hidden', default: '' },
 		{ displayName: 'Line mode key', name: 'lineMode', type: 'hidden', default: '' },
 		{ displayName: 'Line mode label', name: 'lineModeLabel', type: 'hidden', default: '' },
@@ -642,7 +581,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 					userCode: '',
 					projectId: '',
 					projectSecret: '',
-					lineStatus: `Photon sign-in error: ${message}. Click Save to try again.`,
+					lineStatus: `Photon sign-in failed: ${message}. Click Save to start over, or use Troubleshooting → Project ID & Secret.`,
 					setupMethod: 'browser',
 					manualFallback: false,
 				},
@@ -752,7 +691,7 @@ async function runPreAuthentication(
 			} catch (err) {
 				if (isAuthError(err)) {
 					throw new Error(
-						'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
+						'Invalid Project ID or Secret. Check values at app.photon.codes → Settings, or reconnect with browser sign-in.',
 					);
 				}
 			}
@@ -775,7 +714,7 @@ async function runPreAuthentication(
 		}
 
 		if (deviceCode && expiresAt > Date.now()) {
-			const polled = await pollDeviceToken(
+			const polled = await pollDeviceTokenUntilReady(
 				dashboardHost,
 				clientId,
 				deviceCode,
@@ -830,7 +769,7 @@ async function runPreAuthentication(
 				} catch (err) {
 					if (isAuthError(err)) {
 						throw new Error(
-							'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
+							'Invalid Project ID or Secret. Check values at app.photon.codes → Settings, or reconnect with browser sign-in.',
 						);
 					}
 					base.lineStatus =
@@ -880,20 +819,20 @@ async function startPendingDeviceFlow(
 			manualFallback: false,
 			projectId: '',
 			projectSecret: '',
-			lineStatus: `Sign in at ${verifyUrl} (approval code: ${code.user_code}). Close and reopen this panel to see the link above, then click Save again after approving.`,
+			lineStatus: 'Waiting for browser approval — open the sign-in link, approve, then Save again.',
 		}),
 		'pending',
 	);
 }
 
 function connectedState(base: IDataObject): IDataObject {
-	const fallbackStatus =
-		'Connected. Save your workflow, then reopen this credential to refresh line details.';
 	return withConnectionState(
 		{
 			...base,
 			projectRef: base.projectId,
-			lineStatus: base.lineStatus || fallbackStatus,
+			lineStatus:
+				base.lineStatus ||
+				'Connected. Add iMessage Trigger → toggle workflow Active → text Your iMessage Line.',
 		},
 		'connected',
 	);
@@ -941,6 +880,29 @@ async function pollDeviceToken(
 	}
 	const err = ('error' in body && body.error) || 'invalid_request';
 	return { ok: false, error: err };
+}
+
+async function pollDeviceTokenUntilReady(
+	dashboardHost: string,
+	clientId: string,
+	deviceCode: string,
+): Promise<{ ok: true; access_token: string } | { ok: false; error: string }> {
+	const deadline = Date.now() + DEVICE_POLL_MAX_MS;
+	let intervalMs = DEVICE_POLL_INTERVAL_MS;
+
+	while (Date.now() < deadline) {
+		const polled = await pollDeviceToken(dashboardHost, clientId, deviceCode);
+		if (polled.ok) return polled;
+		if (polled.error === 'authorization_pending' || polled.error === 'slow_down') {
+			if (polled.error === 'slow_down') {
+				intervalMs = Math.min(intervalMs + 1000, 5000);
+			}
+			await delay(intervalMs);
+			continue;
+		}
+		return polled;
+	}
+	return { ok: false, error: 'authorization_pending' };
 }
 
 async function listProjects(

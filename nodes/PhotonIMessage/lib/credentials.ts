@@ -9,9 +9,9 @@ import type { SpectrumCredentials } from './types';
 
 const DEFAULT_HOST = 'https://spectrum.photon.codes';
 const NOT_CONNECTED_HINT =
-	'Photon iMessage credential is not connected yet. Open the credential, complete browser sign-in (Save → reopen → open Sign-in link → approve → Retry), or enable "Use Project ID & Secret" and paste values from app.photon.codes.';
+	'Photon iMessage is not connected. Open the credential → Step 1: enter iPhone number and Save → Step 2: approve sign-in link and Save again. Or use Troubleshooting → Project ID & Secret from app.photon.codes.';
 const PENDING_APPROVAL_HINT =
-	'Browser sign-in is still pending. Open the credential, confirm the approval code in your browser, then click Save again. The trigger only runs after sign-in finishes minting your project secret.';
+	'Browser sign-in pending. Open the credential, approve the sign-in link in your browser, then click Save again.';
 
 export async function getSpectrumCredentials(
 	ctx: IExecuteFunctions | IHookFunctions | IWebhookFunctions,
