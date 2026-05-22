@@ -64,25 +64,21 @@ const STANDARD_OPERATIONS = [
 	{
 		name: 'Send Message',
 		value: 'sendMessage',
-		action: 'Send a message',
 		description: 'Text someone — works with Manual Trigger, no iMessage trigger needed',
 	},
 	{
 		name: 'Send Attachment',
 		value: 'sendAttachment',
-		action: 'Send an attachment',
 		description: 'Send a photo, PDF, or other file from a path or n8n binary input',
 	},
 	{
 		name: 'Reply to Message',
 		value: 'replyToMessage',
-		action: 'Reply in thread',
 		description: 'Reply to an inbound message — wire after On iMessage Event',
 	},
 	{
 		name: 'React to Message',
 		value: 'reactToMessage',
-		action: 'React to a message',
 		description: 'Send a tapback — wire after On iMessage Event',
 	},
 	{
@@ -116,6 +112,18 @@ const STANDARD_OPERATIONS = [
 		description: 'Share a contact card with someone',
 	},
 ];
+
+const PRIMARY_PICKER_ACTIONS: Record<string, string> = {
+	sendMessage: 'Send a message',
+	sendAttachment: 'Send an attachment',
+	replyToMessage: 'Reply in thread',
+	reactToMessage: 'React to a message',
+};
+
+const STANDARD_OPERATIONS_PICKER = STANDARD_OPERATIONS.map((op) => ({
+	...op,
+	...(PRIMARY_PICKER_ACTIONS[op.value] ? { action: PRIMARY_PICKER_ACTIONS[op.value] } : {}),
+}));
 
 const EXPERT_OPERATIONS = [
 	{
@@ -275,7 +283,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				displayOptions: { show: { showExpertOptions: [false] } },
-				options: STANDARD_OPERATIONS,
+				options: STANDARD_OPERATIONS_PICKER,
 				default: 'sendMessage',
 			},
 			{
