@@ -6,7 +6,7 @@ import type {
 	IWebhookFunctions,
 	IWebhookResponseData,
 } from 'n8n-workflow';
-import { NodeConnectionTypes } from 'n8n-workflow';
+import { ApplicationError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 import { getSpectrumCredentials } from './lib/credentials';
 import { getSpectrumHeader } from './lib/spectrumHeaders';
@@ -65,7 +65,7 @@ function webhookFailureMessage(
 }
 
 function parseMessageContent(content: { type?: string; [key: string]: unknown }): {
-	contentType: 'text' | 'attachment' | 'unknown';
+	contentType: 'text' | 'attachment';
 	attachmentKind: AttachmentKind | null;
 	text: string | null;
 	attachment: {
@@ -75,18 +75,28 @@ function parseMessageContent(content: { type?: string; [key: string]: unknown })
 		size: number | null;
 	} | null;
 } {
-	if (content.type === 'text') {
+	const type = content.type;
+	if (!type) {
+		throw new ApplicationError('Message is missing content.type');
+	}
+
+	if (type === 'text') {
+		if (typeof content.text !== 'string') {
+			throw new ApplicationError('Text message is missing content.text');
+		}
 		return {
 			contentType: 'text',
 			attachmentKind: null,
-			text: typeof content.text === 'string' ? content.text : null,
+			text: content.text,
 			attachment: null,
 		};
 	}
 
-	if (content.type === 'attachment') {
-		const mime = String(content.mimeType ?? '');
-		const kind = classifyAttachment(mime);
+	if (type === 'attachment') {
+		if (typeof content.mimeType !== 'string' || !content.mimeType) {
+			throw new ApplicationError('Attachment is missing content.mimeType');
+		}
+		const kind = classifyAttachment(content.mimeType);
 		return {
 			contentType: 'attachment',
 			attachmentKind: kind,
@@ -94,18 +104,15 @@ function parseMessageContent(content: { type?: string; [key: string]: unknown })
 			attachment: {
 				kind,
 				name: typeof content.name === 'string' ? content.name : null,
-				mimeType: typeof content.mimeType === 'string' ? content.mimeType : null,
+				mimeType: content.mimeType,
 				size: typeof content.size === 'number' ? content.size : null,
 			},
 		};
 	}
 
-	return {
-		contentType: 'unknown',
-		attachmentKind: null,
-		text: null,
-		attachment: null,
-	};
+	throw new ApplicationError(
+		`Unsupported content type "${type}". Spectrum webhooks currently deliver text and attachment only — see https://docs.photon.codes/webhooks/events`,
+	);
 }
 
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
@@ -298,17 +305,27 @@ export class PhotonIMessageTrigger implements INodeType {
 		}
 
 		if (payload.event !== 'messages') {
-			return { webhookResponse: 'ok', noWebhookResponse: false };
+			throw new NodeOperationError(
+				this.getNode(),
+				`Unsupported webhook event "${payload.event}". This trigger only handles "messages".`,
+			);
 		}
 
-		const senderAddress = payload.message?.sender?.id ?? '';
-		const spaceId = payload.message?.space?.id ?? payload.space?.id ?? '';
-		const content = payload.message?.content ?? {};
-		const parsed = parseMessageContent(content);
+		if (!payload.message) {
+			throw new NodeOperationError(this.getNode(), 'Webhook payload is missing the message field');
+		}
 
-		if (parsed.contentType === 'unknown') {
-			this.logger.warn(
-				`[iMessage by Photon Trigger] Unsupported content type "${String(content.type ?? '')}" — only text and attachment are delivered today`,
+		const senderAddress = payload.message.sender?.id ?? '';
+		const spaceId = payload.message.space?.id ?? payload.space?.id ?? '';
+		const content = payload.message.content ?? {};
+
+		let parsed: ReturnType<typeof parseMessageContent>;
+		try {
+			parsed = parseMessageContent(content);
+		} catch (err) {
+			throw new NodeOperationError(
+				this.getNode(),
+				err instanceof Error ? err.message : String(err),
 			);
 		}
 
@@ -317,14 +334,14 @@ export class PhotonIMessageTrigger implements INodeType {
 				event: payload.event,
 				webhookId: webhookIdHeader ?? null,
 				eventHeader: eventHeader ?? null,
-				messageId: payload.message?.id ?? null,
-				platform: payload.message?.platform ?? 'iMessage',
-				direction: payload.message?.direction ?? 'inbound',
+				messageId: payload.message.id ?? null,
+				platform: payload.message.platform ?? 'iMessage',
+				direction: payload.message.direction ?? 'inbound',
 				spaceId: spaceId || null,
 				spaceType: spaceId.includes(';-;') ? 'dm' : spaceId ? 'group' : null,
 				sender: senderAddress || null,
-				senderPlatform: payload.message?.sender?.platform ?? null,
-				timestamp: payload.message?.timestamp ?? null,
+				senderPlatform: payload.message.sender?.platform ?? null,
+				timestamp: payload.message.timestamp ?? null,
 				contentType: parsed.contentType,
 				attachmentKind: parsed.attachmentKind,
 				text: parsed.text,

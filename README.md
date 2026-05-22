@@ -160,11 +160,13 @@ Output for `event: messages`:
 | `sender` | `string` (E.164 phone or email) |
 | `senderPlatform` | `string` |
 | `timestamp` | ISO 8601 |
-| `contentType` | `"text"`, `"attachment"`, or `"unknown"` for unsupported future types |
+| `contentType` | `"text"` or `"attachment"` |
 | `attachmentKind` | `"photo" \| "voice" \| "video" \| "document" \| "attachment-other"` when `contentType` is `attachment` |
 | `text` | Message body when `contentType` is `text` |
 | `attachment` | `{ kind, name, mimeType, size }` when `contentType` is `attachment` (metadata only — no file bytes) |
 | `raw` | Full Spectrum payload |
+
+Unsupported webhook events or message content types fail the trigger with an error instead of passing data through.
 
 ## Deep links
 
