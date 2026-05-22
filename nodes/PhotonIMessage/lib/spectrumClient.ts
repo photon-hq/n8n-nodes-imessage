@@ -1,4 +1,8 @@
+import { installPhotonIpv4Fetch } from '../../../credentials/photonHttp';
+
 import type { SpectrumCredentials } from './types';
+
+installPhotonIpv4Fetch();
 
 type SpectrumModule = typeof import('spectrum-ts');
 
@@ -88,10 +92,27 @@ export async function withSpectrum<T>(
 	credentials: SpectrumCredentials,
 	fn: (session: SpectrumSession) => Promise<T>,
 ): Promise<T> {
-	const session = await openSpectrum(credentials);
+	let session: SpectrumSession | undefined;
 	try {
+		session = await openSpectrum(credentials);
 		return await fn(session);
+	} catch (err) {
+		throw wrapSpectrumConnectError(err);
 	} finally {
-		await session.stop().catch(() => undefined);
+		await session?.stop().catch(() => undefined);
 	}
+}
+
+function wrapSpectrumConnectError(err: unknown): Error {
+	if (!(err instanceof Error) || err.message !== 'fetch failed') {
+		return err instanceof Error ? err : new Error(String(err));
+	}
+	const cause = (err as Error & { cause?: NodeJS.ErrnoException }).cause;
+	const detail = cause?.message ?? cause?.code ?? '';
+	return new Error(
+		'Could not reach Spectrum Cloud (spectrum.photon.codes). ' +
+			'Check your internet connection and that Project ID / API Key are correct.' +
+			(detail ? ` (${detail})` : ''),
+		{ cause: err },
+	);
 }

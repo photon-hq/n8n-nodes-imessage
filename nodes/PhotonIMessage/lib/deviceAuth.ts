@@ -2,6 +2,8 @@
 // Refs: https://docs.photon.codes/cli/authentication (device flow),
 //       photon-hq/codex `lib/spectrum.ts` (regenerate-secret pattern).
 
+import { photonFetch, photonHttpsJson } from '../../../credentials/photonHttp';
+
 export interface DeviceCodeResponse {
 	device_code: string;
 	user_code: string;
@@ -52,8 +54,6 @@ export class DeviceAuthError extends Error {
 }
 
 const DEFAULT_DASHBOARD = 'https://app.photon.codes';
-// `photon-cli` is the only client id allowlisted by Spectrum's device-flow
-// endpoint today. Override via PHOTON_CLIENT_ID / --client-id if needed.
 const DEFAULT_CLIENT_ID = 'photon-cli';
 const DEFAULT_SCOPE = 'openid profile email';
 
@@ -61,33 +61,12 @@ function normalizeHost(host?: string): string {
 	return (host || DEFAULT_DASHBOARD).replace(/\/+$/, '');
 }
 
-async function readJson(res: Response): Promise<unknown> {
-	const text = await res.text();
-	if (!text) return null;
-	try {
-		return JSON.parse(text);
-	} catch {
-		return text;
-	}
-}
-
-async function expectOk<T>(res: Response, context: string): Promise<T> {
-	if (!res.ok) {
-		const body = await readJson(res);
-		let hint = '';
-		if (body && typeof body === 'object') {
-			const b = body as Record<string, unknown>;
-			const desc = typeof b.error_description === 'string' ? b.error_description : null;
-			const code = typeof b.error === 'string' ? b.error : null;
-			hint = desc ?? code ?? '';
-		}
-		throw new DeviceAuthError(
-			`${context} failed: ${res.status} ${res.statusText}${hint ? ` — ${hint}` : ''}`,
-			res.status,
-			body,
-		);
-	}
-	return ((await readJson(res)) ?? null) as T;
+function errorHint(body: unknown): string {
+	if (!body || typeof body !== 'object') return '';
+	const b = body as Record<string, unknown>;
+	const desc = typeof b.error_description === 'string' ? b.error_description : null;
+	const code = typeof b.error === 'string' ? b.error : null;
+	return desc ?? code ?? '';
 }
 
 export async function startDeviceFlow(opts: {
@@ -95,15 +74,18 @@ export async function startDeviceFlow(opts: {
 	clientId?: string;
 	scope?: string;
 }): Promise<DeviceCodeResponse> {
-	const res = await fetch(`${normalizeHost(opts.dashboardHost)}/api/auth/device/code`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({
-			client_id: opts.clientId || DEFAULT_CLIENT_ID,
-			scope: opts.scope || DEFAULT_SCOPE,
-		}),
-	});
-	return expectOk<DeviceCodeResponse>(res, 'device/code');
+	const body = await photonHttpsJson<DeviceCodeResponse>(
+		`${normalizeHost(opts.dashboardHost)}/api/auth/device/code`,
+		{
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: {
+				client_id: opts.clientId || DEFAULT_CLIENT_ID,
+				scope: opts.scope || DEFAULT_SCOPE,
+			},
+		},
+	);
+	return body;
 }
 
 export async function pollDeviceToken(opts: {
@@ -111,7 +93,7 @@ export async function pollDeviceToken(opts: {
 	clientId?: string;
 	deviceCode: string;
 }): Promise<DeviceTokenResult> {
-	const res = await fetch(`${normalizeHost(opts.dashboardHost)}/api/auth/device/token`, {
+	const res = await photonFetch(`${normalizeHost(opts.dashboardHost)}/api/auth/device/token`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({
@@ -120,7 +102,7 @@ export async function pollDeviceToken(opts: {
 			client_id: opts.clientId || DEFAULT_CLIENT_ID,
 		}),
 	});
-	const body = await readJson(res);
+	const body = await res.json();
 	if (res.ok && body && typeof body === 'object' && 'access_token' in body) {
 		return { ok: true, token: body as DeviceTokenSuccess };
 	}
@@ -135,14 +117,22 @@ export async function pollDeviceToken(opts: {
 	return { ok: false, error: err as DeviceTokenErrorCode, status: res.status, description };
 }
 
-// The polling loop lives in `bin/photon-imessage-login.cjs` — n8n's
-// cloud-compat lint forbids `setTimeout` inside node code.
-
 async function bearerGet<T>(host: string, path: string, bearer: string, context: string): Promise<T> {
-	const res = await fetch(`${normalizeHost(host)}${path}`, {
-		headers: { authorization: `Bearer ${bearer}` },
-	});
-	return expectOk<T>(res, context);
+	try {
+		return await photonHttpsJson<T>(`${normalizeHost(host)}${path}`, {
+			headers: { authorization: `Bearer ${bearer}` },
+		});
+	} catch (err) {
+		const status = (err as { statusCode?: number }).statusCode ?? 0;
+		const body = (err as { body?: unknown }).body ?? null;
+		// CLI layer — no n8n node context for NodeApiError here.
+		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
+		throw new DeviceAuthError(
+			`${context} failed: ${status}${errorHint(body) ? ` — ${errorHint(body)}` : ''}`,
+			status,
+			body,
+		);
+	}
 }
 
 async function bearerPost<T>(
@@ -152,15 +142,25 @@ async function bearerPost<T>(
 	body: unknown,
 	context: string,
 ): Promise<T> {
-	const res = await fetch(`${normalizeHost(host)}${path}`, {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/json',
-			authorization: `Bearer ${bearer}`,
-		},
-		body: body === undefined ? undefined : JSON.stringify(body),
-	});
-	return expectOk<T>(res, context);
+	try {
+		return await photonHttpsJson<T>(`${normalizeHost(host)}${path}`, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				authorization: `Bearer ${bearer}`,
+			},
+			body,
+		});
+	} catch (err) {
+		const status = (err as { statusCode?: number }).statusCode ?? 0;
+		const errBody = (err as { body?: unknown }).body ?? null;
+		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
+		throw new DeviceAuthError(
+			`${context} failed: ${status}${errorHint(errBody) ? ` — ${errorHint(errBody)}` : ''}`,
+			status,
+			errBody,
+		);
+	}
 }
 
 export async function getSession(
@@ -183,9 +183,6 @@ export async function getSession(
 	} catch (err) {
 		if (err instanceof DeviceAuthError && err.status === 401) return null;
 		const message = err instanceof Error ? err.message : String(err);
-		// This module is loaded by the CLI binary (no n8n context). Re-throwing as
-		// the file's own typed error class is correct here; NodeApiError would
-		// require an n8n IExecuteFunctions which we do not have at the CLI layer.
 		// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
 		throw new DeviceAuthError(message, 0, null);
 	}
@@ -233,8 +230,6 @@ export async function createProject(
 	return { id: body.id };
 }
 
-// Rotates the project secret — invalidates any previously-issued secret.
-// Callers must warn users sharing the project with other tooling.
 export async function regenerateProjectSecret(
 	bearer: string,
 	projectId: string,
