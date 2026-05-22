@@ -96,10 +96,7 @@ The node exposes five resources. Pick a resource, then an operation. Every outbo
 
 | Operation | What it does |
 |---|---|
-| **Create Poll** | Send an interactive poll. Votes arrive on the Trigger as `contentType: "poll_option"`. |
-
-> Casting votes programmatically isn't a `spectrum-ts` capability today — `poll_option` content is inbound-only on the SDK. Poll voting requires the low-level [Advanced iMessage Kit](https://docs.photon.codes/advanced-kits/imessage/polls), which is intentionally out of scope for this node.
-
+| **Create Poll** | Send an interactive poll in a conversation. |
 ### Contact
 
 | Operation | What it does |
@@ -147,12 +144,7 @@ WEBHOOK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app n8n start
 
 After the tunnel or `WEBHOOK_URL` is in place, toggle the workflow **Active** (or **Test this trigger**). If you restart ngrok, toggle Active off/on so Spectrum gets the new URL.
 
-Filters:
-
-- **Content Types**: pick any of `*`, `text`, `photo`, `voice`, `video`, `document`, `attachment-other`, plus forward-compat slots (`reaction`, `reply`, `edit`, `richlink`, `poll`, `poll_option`, `contact`, `group`, `custom`). Spectrum currently delivers `text` and `attachment` over webhooks; the remaining slots are reserved per [their docs](https://docs.photon.codes/webhooks/events) and will route automatically once Spectrum starts emitting them.
-- **Sender Address**: trigger only for a specific phone/email.
-- **Space Type**: DM only, group only, or any.
-- **Space ID**: pin to one exact conversation.
+Spectrum webhooks deliver inbound **text** and **attachment** messages only. See the [webhook events spec](https://docs.photon.codes/webhooks/events).
 
 Output for `event: messages`:
 
@@ -166,22 +158,13 @@ Output for `event: messages`:
 | `spaceId` | `string` |
 | `spaceType` | `"dm" \| "group" \| null` — inferred from the space ID shape |
 | `sender` | `string` (E.164 phone or email) |
-| `senderPlatform` | `string` — platform the sender belongs to |
+| `senderPlatform` | `string` |
 | `timestamp` | ISO 8601 |
-| `contentType` | One of `text`, `attachment`, `voice`, `reaction`, `reply`, `edit`, `richlink`, `poll`, `poll_option`, `contact`, `group`, `custom` |
-| `attachmentKind` | `"photo" \| "voice" \| "video" \| "document" \| "attachment-other"` (when applicable) |
-| `text` | Present for `text` |
-| `attachment` | `{ kind, name, mimeType, size }` for any attachment (photo / voice / video / document / other) |
-| `reaction` | `{ emoji, targetId }` for reactions |
-| `reply` | `{ targetId, innerType }` for threaded replies |
-| `edit` | `{ targetId, innerType }` for edits |
-| `richlink` | `{ url }` for rich link previews |
-| `poll` | `{ title, options }` for new polls |
-| `pollVote` | `{ selected, title, pollId }` for votes |
-| `contact` | `{ name, phones, emails, org }` for shared contact cards |
-| `group` | `{ itemCount }` for grouped bundles |
-| `custom` | Raw provider-defined payload |
-| `raw` | Full Spectrum payload (always present for debugging) |
+| `contentType` | `"text"`, `"attachment"`, or `"unknown"` for unsupported future types |
+| `attachmentKind` | `"photo" \| "voice" \| "video" \| "document" \| "attachment-other"` when `contentType` is `attachment` |
+| `text` | Message body when `contentType` is `text` |
+| `attachment` | `{ kind, name, mimeType, size }` when `contentType` is `attachment` (metadata only — no file bytes) |
+| `raw` | Full Spectrum payload |
 
 ## Deep links
 

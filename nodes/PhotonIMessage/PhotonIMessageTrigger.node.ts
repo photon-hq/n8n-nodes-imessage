@@ -20,7 +20,9 @@ import {
 import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks } from './lib/webhookApi';
 
-function classifyAttachment(mime: string): 'photo' | 'voice' | 'video' | 'document' | 'attachment-other' {
+type AttachmentKind = 'photo' | 'voice' | 'video' | 'document' | 'attachment-other';
+
+function classifyAttachment(mime: string): AttachmentKind {
 	if (mime.startsWith('image/')) return 'photo';
 	if (mime.startsWith('audio/')) return 'voice';
 	if (mime.startsWith('video/')) return 'video';
@@ -62,6 +64,50 @@ function webhookFailureMessage(
 	}
 }
 
+function parseMessageContent(content: { type?: string; [key: string]: unknown }): {
+	contentType: 'text' | 'attachment' | 'unknown';
+	attachmentKind: AttachmentKind | null;
+	text: string | null;
+	attachment: {
+		kind: AttachmentKind;
+		name: string | null;
+		mimeType: string | null;
+		size: number | null;
+	} | null;
+} {
+	if (content.type === 'text') {
+		return {
+			contentType: 'text',
+			attachmentKind: null,
+			text: typeof content.text === 'string' ? content.text : null,
+			attachment: null,
+		};
+	}
+
+	if (content.type === 'attachment') {
+		const mime = String(content.mimeType ?? '');
+		const kind = classifyAttachment(mime);
+		return {
+			contentType: 'attachment',
+			attachmentKind: kind,
+			text: null,
+			attachment: {
+				kind,
+				name: typeof content.name === 'string' ? content.name : null,
+				mimeType: typeof content.mimeType === 'string' ? content.mimeType : null,
+				size: typeof content.size === 'number' ? content.size : null,
+			},
+		};
+	}
+
+	return {
+		contentType: 'unknown',
+		attachmentKind: null,
+		text: null,
+		attachment: null,
+	};
+}
+
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
 export class PhotonIMessageTrigger implements INodeType {
 	description: INodeTypeDescription = {
@@ -72,7 +118,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		version: 1,
 		subtitle:
 			'={{ $credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential" }}',
-		description: 'Triggers on real-time iMessage events via Spectrum-managed webhooks',
+		description: 'Triggers when an inbound iMessage arrives (text or attachment)',
 		defaults: { name: 'On iMessage Event' },
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
@@ -94,7 +140,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'<b>Local dev:</b> run <code>npm run dev:tunnel</code> then toggle this workflow <b>Active</b>. <b>n8n Cloud:</b> just toggle Active. Test mode catches one message per Test click.',
+					'Delivers inbound <b>text</b> and <b>attachments</b> only (<a href="https://docs.photon.codes/webhooks/events" target="_blank">Spectrum webhook spec</a>). Local dev: <code>npm run dev:tunnel</code>, then toggle <b>Active</b>.',
 				name: 'webhookModeNotice',
 				type: 'notice',
 				default: '',
@@ -168,7 +214,7 @@ export class PhotonIMessageTrigger implements INodeType {
 			try {
 				await req.readRawBody();
 			} catch {
-				// ignore
+				// no-op
 			}
 		}
 
@@ -258,15 +304,13 @@ export class PhotonIMessageTrigger implements INodeType {
 		const senderAddress = payload.message?.sender?.id ?? '';
 		const spaceId = payload.message?.space?.id ?? payload.space?.id ?? '';
 		const content = payload.message?.content ?? {};
-		const rawContentType = payload.message?.content?.type ?? '';
+		const parsed = parseMessageContent(content);
 
-		const mime = String(content.mimeType ?? '');
-		const attachmentKind =
-			rawContentType === 'attachment' ? classifyAttachment(mime) : undefined;
-		const contentType =
-			rawContentType === 'attachment' && attachmentKind === 'voice'
-				? 'voice'
-				: rawContentType;
+		if (parsed.contentType === 'unknown') {
+			this.logger.warn(
+				`[iMessage by Photon Trigger] Unsupported content type "${String(content.type ?? '')}" — only text and attachment are delivered today`,
+			);
+		}
 
 		const output: INodeExecutionData = {
 			json: {
@@ -281,84 +325,10 @@ export class PhotonIMessageTrigger implements INodeType {
 				sender: senderAddress || null,
 				senderPlatform: payload.message?.sender?.platform ?? null,
 				timestamp: payload.message?.timestamp ?? null,
-				contentType: contentType || null,
-				attachmentKind: attachmentKind ?? null,
-				text: contentType === 'text' ? ((content.text as string | undefined) ?? null) : null,
-				attachment:
-					rawContentType === 'attachment'
-						? {
-								kind: attachmentKind ?? null,
-								name: content.name ?? null,
-								mimeType: content.mimeType ?? null,
-								size: content.size ?? null,
-							}
-						: null,
-				reaction:
-					contentType === 'reaction'
-						? {
-								emoji: content.emoji ?? null,
-								targetId: (content.target as { id?: string } | undefined)?.id ?? null,
-							}
-						: null,
-				reply:
-					contentType === 'reply'
-						? {
-								targetId: (content.target as { id?: string } | undefined)?.id ?? null,
-								innerType:
-									(content.content as { type?: string } | undefined)?.type ?? null,
-							}
-						: null,
-				edit:
-					contentType === 'edit'
-						? {
-								targetId: (content.target as { id?: string } | undefined)?.id ?? null,
-								innerType:
-									(content.content as { type?: string } | undefined)?.type ?? null,
-							}
-						: null,
-				richlink:
-					contentType === 'richlink'
-						? {
-								url: (content.url as string | undefined) ?? null,
-							}
-						: null,
-				poll:
-					contentType === 'poll'
-						? {
-								title: (content.title as string | undefined) ?? null,
-								options: ((content.options as Array<{ title?: string }> | undefined) ?? [])
-									.map((o) => o?.title ?? '')
-									.filter(Boolean),
-							}
-						: null,
-				pollVote:
-					contentType === 'poll_option'
-						? {
-								selected: (content.selected as boolean | undefined) ?? null,
-								title: (content.title as string | undefined) ?? null,
-								pollId:
-									(content.poll as { id?: string } | undefined)?.id ?? null,
-							}
-						: null,
-				contact:
-					contentType === 'contact'
-						? {
-								name: content.name ?? null,
-								phones: content.phones ?? null,
-								emails: content.emails ?? null,
-								org: content.org ?? null,
-							}
-						: null,
-				group:
-					contentType === 'group'
-						? {
-								itemCount: Array.isArray(content.items)
-									? (content.items as unknown[]).length
-									: 0,
-							}
-						: null,
-				custom:
-					contentType === 'custom' ? (content.raw ?? content) : null,
+				contentType: parsed.contentType,
+				attachmentKind: parsed.attachmentKind,
+				text: parsed.text,
+				attachment: parsed.attachment,
 				raw: payload,
 			},
 		};
