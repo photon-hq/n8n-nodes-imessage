@@ -23,6 +23,7 @@ function isPrivateIpv4Host(host: string): boolean {
 	if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
 		return false;
 	}
+	if (parts[0] === 127) return true;
 	if (parts[0] === 10) return true;
 	if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
 	if (parts[0] === 192 && parts[1] === 168) return true;

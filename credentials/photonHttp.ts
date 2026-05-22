@@ -42,6 +42,7 @@ export async function photonHttpsJson<T>(
 		const req = https.request(
 			{
 				host: address,
+				port: url.port ? Number(url.port) : undefined,
 				servername: url.hostname,
 				path: url.pathname + url.search,
 				method,
@@ -68,7 +69,12 @@ export async function photonHttpsJson<T>(
 						!options.ignoreHttpStatusErrors &&
 						(status < 200 || status >= 300)
 					) {
-						reject(new Error(`${status} - ${JSON.stringify(parsed)}`));
+						reject(
+							Object.assign(new Error(`${status} - ${JSON.stringify(parsed)}`), {
+								statusCode: status,
+								body: parsed,
+							}),
+						);
 						return;
 					}
 					if (options.returnFullResponse) {

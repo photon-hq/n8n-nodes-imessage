@@ -43,7 +43,7 @@ async function spectrumRequest<T>(
 }
 
 function normalizePhone(phone: string): string {
-	return phone.replace(/\s+/g, '').trim();
+	return phone.trim().replace(/[\s().-]/g, '');
 }
 
 /** Enable iMessage on the Spectrum project (runtime API, same as codex). */

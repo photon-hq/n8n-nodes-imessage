@@ -652,6 +652,7 @@ async function runPreAuthentication(
 		const hasConnectedSecret =
 			hasStoredConnection &&
 			(connectionState === 'connected' ||
+				(manual && connectionState === 'setup') ||
 				(connectionState === 'pending' &&
 					!activeDeviceFlow &&
 					!((credentials.verificationUrl as string) || '').trim()));
@@ -705,7 +706,12 @@ async function runPreAuthentication(
 				base.imessageLines = lines.imessageLines;
 				base.primaryLineNumber = lines.primaryLineNumber;
 				base.lineStatus = buildLineStatus(lines, yourPhone);
-			} catch {
+			} catch (err) {
+				if (isAuthError(err)) {
+					throw new Error(
+						'Invalid Project ID or Secret. Check values at app.photon.codes → Settings, or reconnect with browser sign-in.',
+					);
+				}
 				base.lineStatus =
 					'Connected, but line details could not be loaded. Save again to refresh.';
 			}
