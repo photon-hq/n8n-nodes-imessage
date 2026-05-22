@@ -32,6 +32,7 @@
 	"scripts": {
 		"build": "n8n-node build && node scripts/bundle-spectrum.mjs",
 		"dev": "n8n-node dev",
+		"dev:tunnel": "node scripts/dev-with-tunnel.mjs",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
 		"release": "n8n-node release",

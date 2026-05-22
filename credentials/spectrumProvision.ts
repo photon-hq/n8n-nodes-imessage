@@ -1,5 +1,7 @@
 import type { IHttpRequestHelper } from 'n8n-workflow';
 
+import { photonHttpsJson } from './photonHttp';
+
 import type { IMessageInfoData, SpectrumEnvelope } from './spectrumTypes';
 
 const HTTP_TIMEOUT_MS = 20_000;
@@ -10,7 +12,7 @@ interface SharedUser {
 }
 
 async function spectrumRequest<T>(
-	helper: IHttpRequestHelper,
+	_helper: IHttpRequestHelper,
 	apiHost: string,
 	projectId: string,
 	projectSecret: string,
@@ -21,19 +23,19 @@ async function spectrumRequest<T>(
 	const host = apiHost.replace(/\/+$/, '');
 	const auth =
 		'Basic ' + Buffer.from(`${projectId}:${projectSecret}`).toString('base64');
-	const raw = (await helper.helpers.httpRequest({
-		method,
-		url: `${host}/projects/${encodeURIComponent(projectId)}${path}`,
-		headers: {
-			Authorization: auth,
-			Accept: 'application/json',
-			...(body ? { 'Content-Type': 'application/json' } : {}),
+	const raw = await photonHttpsJson<SpectrumEnvelope<T> | T>(
+		`${host}/projects/${encodeURIComponent(projectId)}${path}`,
+		{
+			method,
+			headers: {
+				Authorization: auth,
+				Accept: 'application/json',
+				...(body ? { 'Content-Type': 'application/json' } : {}),
+			},
+			body,
+			timeout: HTTP_TIMEOUT_MS,
 		},
-		body,
-		json: true,
-		ignoreHttpStatusErrors: false,
-		timeout: HTTP_TIMEOUT_MS,
-	})) as SpectrumEnvelope<T> | T;
+	);
 	if (raw && typeof raw === 'object' && 'data' in raw) {
 		return (raw as SpectrumEnvelope<T>).data;
 	}
@@ -102,15 +104,14 @@ export async function ensureSharedUser(
 }
 
 export async function createDashboardProject(
-	helper: IHttpRequestHelper,
+	_helper: IHttpRequestHelper,
 	dashboardHost: string,
 	bearer: string,
 	name: string,
 ): Promise<string> {
 	const host = dashboardHost.replace(/\/+$/, '');
-	const body = (await helper.helpers.httpRequest({
+	const body = await photonHttpsJson<{ id?: string }>(`${host}/api/projects`, {
 		method: 'POST',
-		url: `${host}/api/projects`,
 		headers: {
 			authorization: `Bearer ${bearer}`,
 			'content-type': 'application/json',
@@ -122,9 +123,8 @@ export async function createDashboardProject(
 			template: false,
 			observability: false,
 		},
-		json: true,
 		timeout: HTTP_TIMEOUT_MS,
-	})) as { id?: string };
+	});
 	if (!body?.id) {
 		throw new Error('Photon dashboard did not return a project id when creating a project.');
 	}

@@ -5,7 +5,6 @@ import type {
 	ICredentialType,
 	IDataObject,
 	IHttpRequestHelper,
-	IHttpRequestOptions,
 	INodeProperties,
 } from 'n8n-workflow';
 
@@ -16,6 +15,7 @@ import {
 	pickExistingProject,
 	projectResolutionError,
 } from './projectResolve';
+import { photonHttpsJson } from './photonHttp';
 import {
 	createDashboardProject,
 	provisionSpectrumProject,
@@ -38,7 +38,7 @@ const DEFAULT_DASHBOARD = 'https://app.photon.codes';
 const DEFAULT_RUNTIME = 'https://spectrum.photon.codes';
 const DEFAULT_SCOPE = 'openid profile email';
 const PENDING_SIGN_IN_TEST_MESSAGE =
-	'Still waiting for browser approval. Open the sign-in link above, confirm the approval code, then click Retry at the top (not Save).';
+	'Still waiting for browser approval. Open the sign-in link above, confirm the approval code, then click Save again to finish connecting.';
 const BEARER_MANUAL_SENTINEL = 'manual';
 // n8n RoutingNode evaluates $credentials BEFORE preAuthentication runs, so we cannot
 // reliably branch on bearerToken vs projectSecret here. The expression also cannot
@@ -47,8 +47,7 @@ const BEARER_MANUAL_SENTINEL = 'manual';
 // (device-flow exchange, project minting); the resulting auth state then surfaces in
 // the credential UI fields.
 const CREDENTIAL_TEST_URL = `${DEFAULT_DASHBOARD}/api/auth/ok`;
-/** Device-flow HTTP calls only; omit timeout so n8n uses its default (avoids ECONNABORTED on slow networks). */
-const DEVICE_HTTP_TIMEOUT_MS = 60_000;
+const DEVICE_HTTP_TIMEOUT_MS = 20_000;
 
 /** Drives which fields n8n shows (set on every preAuthentication return). */
 type ConnectionState = 'setup' | 'pending' | 'connected';
@@ -111,6 +110,79 @@ function wantsAutoCreateProject(credentials: ICredentialDataDecryptedObject): bo
 	return true;
 }
 
+function isRedactedSecret(value: unknown): boolean {
+	return typeof value === 'string' && value.startsWith('*****');
+}
+
+function restoreDeviceFlowFromOAuth(
+	credentials: ICredentialDataDecryptedObject,
+): ICredentialDataDecryptedObject {
+	const oauth = credentials.oauthTokenData;
+	if (!oauth || typeof oauth !== 'object') return credentials;
+	const backup = (oauth as { photonDeviceFlow?: ICredentialDataDecryptedObject }).photonDeviceFlow;
+	if (!backup) return credentials;
+
+	const deviceCodeRaw = ((credentials.deviceCode as string) || '').trim();
+	const verificationUrl = ((credentials.verificationUrl as string) || '').trim();
+	const userCode = ((credentials.userCode as string) || '').trim();
+	const patch: ICredentialDataDecryptedObject = { ...credentials };
+
+	if ((!deviceCodeRaw || isRedactedSecret(deviceCodeRaw)) && backup.deviceCode) {
+		patch.deviceCode = backup.deviceCode;
+		patch.deviceCodeExpiresAt = backup.deviceCodeExpiresAt;
+	}
+	if (!verificationUrl && backup.verificationUrl) {
+		patch.verificationUrl = backup.verificationUrl;
+		patch.userCode = backup.userCode;
+	}
+	if (!userCode && backup.userCode) {
+		patch.userCode = backup.userCode;
+	}
+	if (backup.connectionState && !patch.connectionState) {
+		patch.connectionState = backup.connectionState;
+	}
+	return patch;
+}
+
+function resolveActiveDeviceFlow(credentials: ICredentialDataDecryptedObject): {
+	deviceCode: string;
+	expiresAt: number;
+	active: boolean;
+} {
+	const restored = restoreDeviceFlowFromOAuth(credentials);
+	const deviceCodeRaw = ((restored.deviceCode as string) || '').trim();
+	const deviceCode = isRedactedSecret(deviceCodeRaw) ? '' : deviceCodeRaw;
+	const expiresAt = Number(restored.deviceCodeExpiresAt ?? 0);
+	return {
+		deviceCode,
+		expiresAt,
+		active: !!deviceCode && expiresAt > Date.now(),
+	};
+}
+
+function withDeviceFlowOAuthBackup(data: IDataObject): IDataObject {
+	const state = (data.connectionState as string) || '';
+	const verificationUrl = ((data.verificationUrl as string) || '').trim();
+	if (state !== 'pending' || !verificationUrl) return data;
+	const oauth =
+		data.oauthTokenData && typeof data.oauthTokenData === 'object'
+			? (data.oauthTokenData as Record<string, unknown>)
+			: {};
+	return {
+		...data,
+		oauthTokenData: {
+			...oauth,
+			photonDeviceFlow: {
+				connectionState: state,
+				deviceCode: data.deviceCode,
+				deviceCodeExpiresAt: data.deviceCodeExpiresAt,
+				verificationUrl,
+				userCode: data.userCode,
+			},
+		},
+	};
+}
+
 export class PhotonSpectrumApi implements ICredentialType {
 	name = 'photonSpectrumApi';
 	displayName = 'Photon iMessage API';
@@ -127,23 +199,55 @@ export class PhotonSpectrumApi implements ICredentialType {
 		// ── Setup (device sign-in — default) ───────────────────────────────
 		{
 			displayName:
-				'<b>Step 1:</b> enter your iPhone number below (used to assign your shared-pool line). <b>Step 2:</b> click Save — a browser sign-in link appears. <b>Step 3:</b> reopen this panel, follow the link, approve, then click Retry at the top.',
+				'<b>Step 1:</b> enter your iPhone number. <b>Step 2:</b> click <b>Save</b> — n8n auto-runs sign-in (spinner ~2–5s). <b>Step 3:</b> <b>close and reopen</b> this credential panel to see the sign-in link and approval code. <b>Step 4:</b> open the link, approve, then click <b>Save</b> again to finish connecting.',
 			name: 'setupNotice',
 			type: 'notice',
 			default: '',
 			displayOptions: {
 				show: { connectionState: ['setup'] },
+				hide: {
+					manualFallback: [true],
+					verificationUrl: [{ _cnd: { not: '' } }],
+				},
+			},
+		},
+		{
+			displayName:
+				'Sign-in is in progress. If you just clicked Save, close this panel and open the credential again to refresh the link and code below.',
+			name: 'reloadHintNotice',
+			type: 'notice',
+			default: '',
+			displayOptions: {
+				show: { connectionState: ['setup'] },
+				hide: {
+					manualFallback: [true],
+					verificationUrl: [{ _cnd: { not: '' } }],
+				},
+			},
+		},
+		{
+			displayName:
+				'Open the sign-in link below in your browser. Confirm the approval code if prompted, then click <b>Save</b> again to finish connecting.',
+			name: 'pendingApprovalNotice',
+			type: 'notice',
+			default: '',
+			displayOptions: {
+				show: {
+					verificationUrl: [{ _cnd: { not: '' } }],
+				},
 				hide: { manualFallback: [true] },
 			},
 		},
 		{
 			displayName:
-				'Open the sign-in link below in your browser. Confirm the approval code if prompted, then click <b>Retry</b> at the top (not Save — Save can reset sign-in progress).',
-			name: 'pendingApprovalNotice',
+				'Approved in the browser? Click <b>Save</b> again (top-right) to finish connecting and load your iMessage line.',
+			name: 'finishConnectNotice',
 			type: 'notice',
 			default: '',
 			displayOptions: {
-				show: { connectionState: ['pending'] },
+				show: {
+					verificationUrl: [{ _cnd: { not: '' } }],
+				},
 				hide: { manualFallback: [true] },
 			},
 		},
@@ -155,7 +259,9 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { editable: false },
 			description: 'Cmd+click (Mac) or copy and paste into your browser.',
 			displayOptions: {
-				show: { connectionState: ['pending'] },
+				show: {
+					verificationUrl: [{ _cnd: { not: '' } }],
+				},
 				hide: { manualFallback: [true] },
 			},
 		},
@@ -167,7 +273,9 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { editable: false },
 			description: 'Enter on the Photon sign-in page if it asks for a code.',
 			displayOptions: {
-				show: { connectionState: ['pending'] },
+				show: {
+					userCode: [{ _cnd: { not: '' } }],
+				},
 				hide: { manualFallback: [true] },
 			},
 		},
@@ -301,7 +409,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 		// Covers both "phone empty" and "phone entered but Spectrum hasn't assigned a number yet".
 		{
 			displayName:
-				'⚠ <b>No iMessage line assigned yet.</b> Enter your iPhone number in the field above (E.164 format, e.g. +15551234567), then click <b>Retry</b> at the top. Photon will assign a pool number you can text from your iPhone.',
+				'⚠ <b>No iMessage line assigned yet.</b> Enter your iPhone number in the field above (E.164 format, e.g. +15551234567), then click <b>Save</b> again. Photon will assign a pool number you can text from your iPhone.',
 			name: 'noLineWarningNoPhone',
 			type: 'notice',
 			default: '',
@@ -318,7 +426,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 		},
 		{
 			displayName:
-				'⚠ <b>No iMessage line assigned yet.</b> Your phone number is saved but Spectrum hasn\'t returned a pool line. Click <b>Retry</b> at the top — if it still doesn\'t appear, check your phone number is in E.164 (+CC...) format and try again.',
+				'⚠ <b>No iMessage line assigned yet.</b> Your phone number is saved but Spectrum hasn\'t returned a pool line. Click <b>Save</b> again — if it still doesn\'t appear, check your phone number is in E.164 (+CC...) format and try again.',
 			name: 'noLineWarningWithPhone',
 			type: 'notice',
 			default: '',
@@ -341,6 +449,36 @@ export class PhotonSpectrumApi implements ICredentialType {
 				show: {
 					projectId: [{ _cnd: { not: '' } }],
 					primaryLineNumber: [{ _cnd: { not: '' } }],
+				},
+				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
+			},
+		},
+		{
+			displayName:
+				'<b>Webhooks on the Photon dashboard</b> appear under the <b>Photon dashboard project</b> field below (app.photon.codes → switch to that project → Webhook tab). They are removed when you stop test listen or deactivate the workflow — an empty tab outside those moments is normal.',
+			name: 'webhookDashboardNotice',
+			type: 'notice',
+			default: '',
+			displayOptions: {
+				show: {
+					connectionState: ['connected'],
+					projectId: [{ _cnd: { not: '' } }],
+				},
+				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
+			},
+		},
+		{
+			displayName: 'Photon dashboard project',
+			name: 'dashboardProjectName',
+			type: 'string',
+			default: '',
+			typeOptions: { editable: false },
+			description:
+				'On app.photon.codes, select this project (not other projects like codex) to view webhooks n8n registers.',
+			displayOptions: {
+				show: {
+					connectionState: ['connected'],
+					dashboardProjectName: [{ _cnd: { not: '' } }],
 				},
 				hide: { verificationUrl: [{ _cnd: { not: '' } }] },
 			},
@@ -401,11 +539,12 @@ export class PhotonSpectrumApi implements ICredentialType {
 			default: '',
 			typeOptions: { editable: false },
 			displayOptions: {
-				show: { connectionState: ['connected'] },
+				show: {
+					lineStatus: [{ _cnd: { not: '' } }],
+				},
 				hide: {
-					primaryLineNumber: [{ _cnd: { not: '' } }],
-					lineMode: ['shared'],
 					verificationUrl: [{ _cnd: { not: '' } }],
+					primaryLineNumber: [{ _cnd: { not: '' } }],
 				},
 			},
 		},
@@ -436,6 +575,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 		},
 
 		// ── Hidden state ────────────────────────────────────────────────────
+		{ displayName: 'Dashboard project ID', name: 'dashboardProjectId', type: 'hidden', default: '' },
 		{ displayName: 'Line mode key', name: 'lineMode', type: 'hidden', default: '' },
 		{ displayName: 'Line mode label', name: 'lineModeLabel', type: 'hidden', default: '' },
 		{ displayName: 'Spectrum Runtime URL', name: 'apiHost', type: 'hidden', default: DEFAULT_RUNTIME },
@@ -448,7 +588,7 @@ export class PhotonSpectrumApi implements ICredentialType {
 			typeOptions: { expirable: true, password: true },
 			default: '',
 		},
-		{ displayName: 'Device code', name: 'deviceCode', type: 'hidden', default: '' },
+		{ displayName: 'Device code', name: 'deviceCode', type: 'hidden', typeOptions: { password: true }, default: '' },
 		{ displayName: 'Device code expires at', name: 'deviceCodeExpiresAt', type: 'hidden', default: 0 },
 	];
 
@@ -465,15 +605,30 @@ export class PhotonSpectrumApi implements ICredentialType {
 			// start and break the approve-then-Retry loop.
 			const isPending = message.includes(PENDING_SIGN_IN_TEST_MESSAGE);
 			if (isPending) {
+				// Fail the credential test so n8n surfaces the message; device state is
+				// already persisted from the initial Save.
+				throw err instanceof Error ? err : new Error(message);
+			}
+			const restored = restoreDeviceFlowFromOAuth(credentials);
+			const hasPendingBackup =
+				((restored.verificationUrl as string) || '').trim() &&
+				((restored.userCode as string) || '').trim() &&
+				!isRedactedSecret(restored.deviceCode);
+			if (hasPendingBackup && /timeout|ECONN|ENET|ENOTFOUND|aborted/i.test(message)) {
 				return withConnectionState(
-					{
+					withDeviceFlowOAuthBackup({
 						bearerToken: '',
 						projectId: '',
 						projectSecret: '',
 						setupMethod: 'browser',
 						manualFallback: false,
-						// preserve: deviceCode, deviceCodeExpiresAt, verificationUrl, userCode
-					},
+						deviceCode: restored.deviceCode,
+						deviceCodeExpiresAt: restored.deviceCodeExpiresAt,
+						verificationUrl: restored.verificationUrl,
+						userCode: restored.userCode,
+						lineStatus:
+							'Network hiccup during sign-in. Close and reopen this panel, then click Save again.',
+					}),
 					'pending',
 				);
 			}
@@ -524,6 +679,7 @@ async function runPreAuthentication(
 	helper: IHttpRequestHelper,
 	credentials: ICredentialDataDecryptedObject,
 ): Promise<IDataObject> {
+		credentials = restoreDeviceFlowFromOAuth(credentials);
 		const dashboardHost = trimHost(credentials.dashboardHost, DEFAULT_DASHBOARD);
 		const clientId = (credentials.clientId as string) || DEFAULT_CLIENT_ID;
 		const manual = wantsManualCredentials(credentials);
@@ -533,27 +689,46 @@ async function runPreAuthentication(
 		const manualProjectId = ((credentials.manualProjectId as string) || '').trim();
 		const manualProjectSecret = ((credentials.manualProjectSecret as string) || '').trim();
 		const storedProjectId = ((credentials.projectId as string) || '').trim();
-		const storedProjectSecret = ((credentials.projectSecret as string) || '').trim();
+		const storedProjectSecretRaw = ((credentials.projectSecret as string) || '').trim();
+		const storedProjectSecret = isRedactedSecret(storedProjectSecretRaw)
+			? ''
+			: storedProjectSecretRaw;
 		const projectIdInput = manual && manualProjectId ? manualProjectId : storedProjectId;
 		const projectSecretInput =
-			manual && manualProjectSecret ? manualProjectSecret : storedProjectSecret;
+			manual && manualProjectSecret && !isRedactedSecret(manualProjectSecret)
+				? manualProjectSecret
+				: storedProjectSecret;
 		const bearer = ((credentials.bearerToken as string) || '').trim();
+		const connectionState = (credentials.connectionState as string) || '';
 
-		// Spectrum secrets come in two shapes: 64-char hex (legacy) and ~43-char
-		// base64url (current dashboard format, e.g. "9TQvmyTJUlz...-v8"). Accept both;
-		// reject obvious placeholders like blank or short tokens.
+		// Credential Save auto-runs test and unredacts projectSecret into the payload.
+		// Ignore stored secrets until connectionState is actually connected.
 		const looksLikeSpectrumSecret =
 			projectSecretInput.length >= 24 &&
 			/^[A-Za-z0-9_-]+$/.test(projectSecretInput);
-		const hasConnectedSecret =
+		const hasStoredConnection =
 			!!projectIdInput && !!projectSecretInput && looksLikeSpectrumSecret;
+		const { deviceCode, expiresAt, active: activeDeviceFlow } =
+			resolveActiveDeviceFlow(credentials);
+		const hasConnectedSecret =
+			hasStoredConnection &&
+			(connectionState === 'connected' ||
+				(connectionState === 'pending' &&
+					!activeDeviceFlow &&
+					!((credentials.verificationUrl as string) || '').trim()));
 
 		if (hasConnectedSecret) {
+			const dashboardMeta = await enrichDashboardProjectMeta(
+				dashboardHost,
+				bearer,
+				projectIdInput,
+			);
 			const base: IDataObject = {
 				projectId: projectIdInput,
 				projectSecret: projectSecretInput,
 				bearerToken: bearer || BEARER_MANUAL_SENTINEL,
 				projectRef: projectIdInput,
+				...dashboardMeta,
 				setupMethod: manual ? 'manual' : 'browser',
 				manualFallback: manual,
 				deviceCode: '',
@@ -572,7 +747,7 @@ async function runPreAuthentication(
 						projectSecret: projectSecretInput,
 						contactPhone: yourPhone || undefined,
 					}),
-					timeoutAfter(6000, 'provision timeout'),
+					timeoutAfter(15_000, 'provision timeout'),
 				]);
 			} catch (err) {
 				if (isAuthError(err)) {
@@ -584,7 +759,7 @@ async function runPreAuthentication(
 			try {
 				const lines = await Promise.race([
 					lineInfoFields(helper, apiHost, projectIdInput, projectSecretInput, yourPhone || undefined),
-					timeoutAfter(4000, 'line-enrich timeout'),
+					timeoutAfter(10_000, 'line-enrich timeout'),
 				]);
 				base.lineMode = lines.lineMode;
 				base.lineModeLabel = lines.lineModeLabel;
@@ -592,24 +767,22 @@ async function runPreAuthentication(
 				base.primaryLineNumber = lines.primaryLineNumber;
 				base.lineStatus = buildLineStatus(lines, yourPhone);
 			} catch {
-				// skip line UI on timeout
+				base.lineStatus =
+					'Connected, but line details could not be loaded. Save again to refresh.';
 			}
 
 			return withConnectionState(base, 'connected');
 		}
 
-		const deviceCode = ((credentials.deviceCode as string) || '').trim();
-		const expiresAt = Number(credentials.deviceCodeExpiresAt ?? 0);
 		if (deviceCode && expiresAt > Date.now()) {
 			const polled = await pollDeviceToken(
-				helper,
 				dashboardHost,
 				clientId,
 				deviceCode,
 			);
 			if (polled.ok) {
 				const newBearer = polled.access_token;
-				const { projectId, projectSecret } = await mintFromBearer(helper, {
+				const minted = await mintFromBearer(helper, {
 					bearer: newBearer,
 					dashboardHost,
 					projectIdInput,
@@ -618,8 +791,7 @@ async function runPreAuthentication(
 				});
 				const base: IDataObject = {
 					bearerToken: newBearer,
-					projectId,
-					projectSecret,
+					...minted,
 					createProjectIfNone: wantsAutoCreateProject(credentials),
 					deviceCode: '',
 					deviceCodeExpiresAt: 0,
@@ -634,21 +806,21 @@ async function runPreAuthentication(
 					await Promise.race([
 						provisionSpectrumProject(helper, {
 							apiHost: trimHost(credentials.apiHost, DEFAULT_RUNTIME),
-							projectId,
-							projectSecret,
+							projectId: minted.projectId,
+							projectSecret: minted.projectSecret,
 							contactPhone: yourPhone || undefined,
 						}),
-						timeoutAfter(8000, 'provision timeout'),
+						timeoutAfter(15_000, 'provision timeout'),
 					]);
 					const lines = await Promise.race([
 						lineInfoFields(
 							helper,
 							trimHost(credentials.apiHost, DEFAULT_RUNTIME),
-							projectId,
-							projectSecret,
+							minted.projectId,
+							minted.projectSecret,
 							yourPhone || undefined,
 						),
-						timeoutAfter(5000, 'line-enrich timeout'),
+						timeoutAfter(10_000, 'line-enrich timeout'),
 					]);
 					base.lineMode = lines.lineMode;
 					base.lineModeLabel = lines.lineModeLabel;
@@ -661,6 +833,8 @@ async function runPreAuthentication(
 							'Invalid Project ID or Project Secret. Reconnect with valid credentials and retry.',
 						);
 					}
+					base.lineStatus =
+						'Connected, but line assignment is still loading. Save again in a few seconds.';
 				}
 				return connectedState(base);
 			}
@@ -689,14 +863,14 @@ async function runPreAuthentication(
 }
 
 async function startPendingDeviceFlow(
-	helper: IHttpRequestHelper,
+	_helper: IHttpRequestHelper,
 	dashboardHost: string,
 	clientId: string,
 ): Promise<IDataObject> {
-	const code = await startDeviceFlow(helper, dashboardHost, clientId);
+	const code = await startDeviceFlow(dashboardHost, clientId);
 	const verifyUrl = code.verification_uri_complete || code.verification_uri;
 	return withConnectionState(
-		{
+		withDeviceFlowOAuthBackup({
 			bearerToken: '',
 			deviceCode: code.device_code,
 			deviceCodeExpiresAt: Date.now() + code.expires_in * 1000,
@@ -706,8 +880,8 @@ async function startPendingDeviceFlow(
 			manualFallback: false,
 			projectId: '',
 			projectSecret: '',
-			lineStatus: '',
-		},
+			lineStatus: `Sign in at ${verifyUrl} (approval code: ${code.user_code}). Close and reopen this panel to see the link above, then click Save again after approving.`,
+		}),
 		'pending',
 	);
 }
@@ -725,98 +899,131 @@ function connectedState(base: IDataObject): IDataObject {
 	);
 }
 
-async function httpJson<T>(
-	helper: IHttpRequestHelper,
-	options: IHttpRequestOptions,
-): Promise<T> {
-	const response = (await helper.helpers.httpRequest({
-		timeout: DEVICE_HTTP_TIMEOUT_MS,
-		...options,
-		json: true,
-		returnFullResponse: false,
-	} as IHttpRequestOptions)) as T;
-	return response;
-}
-
 async function startDeviceFlow(
-	helper: IHttpRequestHelper,
 	dashboardHost: string,
 	clientId: string,
 ): Promise<DeviceCodeResponse> {
-	return httpJson<DeviceCodeResponse>(helper, {
-		method: 'POST',
-		url: `${dashboardHost}/api/auth/device/code`,
-		headers: { 'content-type': 'application/json' },
-		body: { client_id: clientId, scope: DEFAULT_SCOPE },
-	});
+	return photonHttpsJson<DeviceCodeResponse>(
+		`${dashboardHost}/api/auth/device/code`,
+		{
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: { client_id: clientId, scope: DEFAULT_SCOPE },
+			timeout: DEVICE_HTTP_TIMEOUT_MS,
+		},
+	);
 }
 
 async function pollDeviceToken(
-	helper: IHttpRequestHelper,
 	dashboardHost: string,
 	clientId: string,
 	deviceCode: string,
 ): Promise<{ ok: true; access_token: string } | { ok: false; error: string }> {
-	const response = (await helper.helpers.httpRequest({
+	const response = await photonHttpsJson<{
+		statusCode: number;
+		body: DeviceTokenSuccess | DeviceTokenError;
+	}>(`${dashboardHost}/api/auth/device/token`, {
 		method: 'POST',
-		url: `${dashboardHost}/api/auth/device/token`,
 		headers: { 'content-type': 'application/json' },
 		body: {
 			grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
 			device_code: deviceCode,
 			client_id: clientId,
 		},
-		json: true,
 		returnFullResponse: true,
 		ignoreHttpStatusErrors: true,
 		timeout: DEVICE_HTTP_TIMEOUT_MS,
-	} as IHttpRequestOptions)) as {
-		statusCode: number;
-		body: DeviceTokenSuccess | DeviceTokenError;
-	};
+	});
 
 	const body = response.body;
 	if ('access_token' in body && body.access_token) {
 		return { ok: true, access_token: body.access_token };
 	}
-	const err =
-		('error' in body && body.error) || 'invalid_request';
+	const err = ('error' in body && body.error) || 'invalid_request';
 	return { ok: false, error: err };
 }
 
 async function listProjects(
-	helper: IHttpRequestHelper,
 	dashboardHost: string,
 	bearer: string,
 ): Promise<ProjectSummary[]> {
-	const body = (await helper.helpers.httpRequest({
-		method: 'GET',
-		url: `${dashboardHost}/api/projects`,
-		headers: { authorization: `Bearer ${bearer}` },
-		json: true,
-		timeout: DEVICE_HTTP_TIMEOUT_MS,
-	} as IHttpRequestOptions)) as ProjectSummary[] | { projects?: ProjectSummary[]; data?: ProjectSummary[] };
+	const body = await photonHttpsJson<ProjectSummary[] | { projects?: ProjectSummary[]; data?: ProjectSummary[] }>(
+		`${dashboardHost}/api/projects`,
+		{
+			method: 'GET',
+			headers: { authorization: `Bearer ${bearer}` },
+			timeout: DEVICE_HTTP_TIMEOUT_MS,
+		},
+	);
 	if (Array.isArray(body)) return body;
 	return body.projects ?? body.data ?? [];
 }
 
 async function regenerateSecret(
-	helper: IHttpRequestHelper,
 	dashboardHost: string,
 	bearer: string,
 	projectId: string,
 ): Promise<string> {
-	const body = (await helper.helpers.httpRequest({
-		method: 'POST',
-		url: `${dashboardHost}/api/projects/${encodeURIComponent(projectId)}/regenerate-secret`,
-		headers: { authorization: `Bearer ${bearer}` },
-		json: true,
-		timeout: DEVICE_HTTP_TIMEOUT_MS,
-	} as IHttpRequestOptions)) as { projectSecret?: string };
+	const body = await photonHttpsJson<{ projectSecret?: string }>(
+		`${dashboardHost}/api/projects/${encodeURIComponent(projectId)}/regenerate-secret`,
+		{
+			method: 'POST',
+			headers: { authorization: `Bearer ${bearer}` },
+			timeout: DEVICE_HTTP_TIMEOUT_MS,
+		},
+	);
 	if (!body?.projectSecret) {
 		throw new Error('Spectrum did not return a projectSecret on rotation.');
 	}
 	return body.projectSecret;
+}
+
+function dashboardProjectFields(picked: ProjectSummary): IDataObject {
+	const name = (picked.name ?? '').trim() || picked.id;
+	return {
+		dashboardProjectId: picked.id,
+		dashboardProjectName: name,
+	};
+}
+
+async function enrichDashboardProjectMeta(
+	dashboardHost: string,
+	bearer: string,
+	spectrumProjectId: string,
+): Promise<IDataObject> {
+	if (!bearer || bearer === BEARER_MANUAL_SENTINEL || !spectrumProjectId.trim()) {
+		return {};
+	}
+	try {
+		const projects = await listProjects(dashboardHost, bearer);
+		const picked = projects.find(
+			(p) =>
+				p.spectrumProjectId === spectrumProjectId ||
+				p.id === spectrumProjectId,
+		);
+		return picked ? dashboardProjectFields(picked) : {};
+	} catch {
+		return {};
+	}
+}
+
+function mintResult(
+	picked: ProjectSummary,
+	projectSecret: string,
+): {
+	projectId: string;
+	projectSecret: string;
+	dashboardProjectId: string;
+	dashboardProjectName: string;
+} {
+	const spectrumId = (picked.spectrumProjectId ?? '').trim();
+	const meta = dashboardProjectFields(picked);
+	return {
+		projectId: spectrumId,
+		projectSecret,
+		dashboardProjectId: meta.dashboardProjectId as string,
+		dashboardProjectName: meta.dashboardProjectName as string,
+	};
 }
 
 async function mintFromBearer(
@@ -834,11 +1041,16 @@ async function mintFromBearer(
 		 */
 		createProjectIfNone?: boolean;
 	},
-): Promise<{ projectId: string; projectSecret: string }> {
+): Promise<{
+	projectId: string;
+	projectSecret: string;
+	dashboardProjectId: string;
+	dashboardProjectName: string;
+}> {
 	const { bearer, dashboardHost, projectIdInput, projectName } = args;
 	const allowCreate = args.createProjectIfNone !== false;
 
-	const projects = await listProjects(helper, dashboardHost, bearer);
+	const projects = await listProjects(dashboardHost, bearer);
 
 	let picked: ProjectSummary | undefined;
 	const wantedId = projectIdInput.trim();
@@ -866,7 +1078,7 @@ async function mintFromBearer(
 				(projectName ?? '').trim() || 'n8n iMessage',
 			);
 			// Re-fetch to get the spectrumProjectId for the newly created project.
-			const refreshed = await listProjects(helper, dashboardHost, bearer);
+			const refreshed = await listProjects(dashboardHost, bearer);
 			picked = refreshed.find((p) => p.id === newDashboardId);
 			if (!picked) {
 				throw new Error('Created dashboard project but could not load it back.');
@@ -900,11 +1112,11 @@ async function mintFromBearer(
 	// (CLI, Codex, custom apps) may be using.
 	const inlineSecret = (picked.projectSecret ?? '').trim();
 	if (inlineSecret) {
-		return { projectId: spectrumId, projectSecret: inlineSecret };
+		return mintResult(picked, inlineSecret);
 	}
 
 	// Fallback: rotate to mint a fresh secret. Returns a secret tied to spectrumProjectId.
-	const projectSecret = await regenerateSecret(helper, dashboardHost, bearer, picked.id);
-	return { projectId: spectrumId, projectSecret };
+	const projectSecret = await regenerateSecret(dashboardHost, bearer, picked.id);
+	return mintResult(picked, projectSecret);
 }
 

@@ -5,7 +5,10 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError } from 'n8n-workflow';
 
+import { photonHttpsJson } from '../../../credentials/photonHttp';
 import type { SpectrumCredentials, WebhookRegistration } from './types';
+
+const HTTP_TIMEOUT_MS = 20_000;
 
 function basicAuth(creds: SpectrumCredentials): string {
 	return (
@@ -34,17 +37,40 @@ async function call<T>(
 	body?: Record<string, unknown>,
 ): Promise<T> {
 	const apiHost = (creds.apiHost || 'https://spectrum.photon.codes').replace(/\/+$/, '');
-	const response = (await ctx.helpers.httpRequest({
+	const url = `${apiHost}${path}`;
+	const headers = {
+		Authorization: basicAuth(creds),
+		Accept: 'application/json',
+	};
+
+	if (method === 'DELETE') {
+		const response = await photonHttpsJson<{ statusCode: number; body: unknown }>(url, {
+			method: 'DELETE',
+			headers,
+			returnFullResponse: true,
+			ignoreHttpStatusErrors: true,
+			timeout: HTTP_TIMEOUT_MS,
+		});
+		if (response.statusCode === 404) {
+			return undefined as T;
+		}
+		if (response.statusCode < 200 || response.statusCode >= 300) {
+			throw new NodeApiError(ctx.getNode(), {
+				message: `Spectrum webhook API call failed: DELETE ${path} (${response.statusCode})`,
+			});
+		}
+		return undefined as T;
+	}
+
+	const response = await photonHttpsJson<SpectrumResponse<T>>(url, {
 		method,
-		url: `${apiHost}${path}`,
 		headers: {
-			Authorization: basicAuth(creds),
+			...headers,
 			'Content-Type': 'application/json',
-			Accept: 'application/json',
 		},
 		body,
-		json: true,
-	})) as SpectrumResponse<T>;
+		timeout: HTTP_TIMEOUT_MS,
+	});
 	if (!response?.succeed) {
 		throw new NodeApiError(ctx.getNode(), {
 			message: `Spectrum webhook API call failed: ${method} ${path}`,
@@ -98,7 +124,6 @@ export async function deleteWebhook(
 			`/projects/${creds.projectId}/webhooks/${encodeURIComponent(webhookId)}/`,
 		);
 	} catch (err) {
-		// 404 is fine — webhook already gone.
 		const status = (err as { httpCode?: string | number; statusCode?: number }).httpCode
 			?? (err as { statusCode?: number }).statusCode;
 		if (status === 404 || status === '404') return;

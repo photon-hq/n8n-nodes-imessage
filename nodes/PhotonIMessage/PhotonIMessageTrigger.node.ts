@@ -9,19 +9,11 @@ import type {
 import { NodeConnectionTypes } from 'n8n-workflow';
 
 import { getSpectrumCredentials } from './lib/credentials';
+import { getSpectrumHeader, isDevTunnelWebhookUrl } from './lib/spectrumHeaders';
 import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks, registerWebhook } from './lib/webhookApi';
 import type { WebhookRegistration } from './lib/types';
 
-/** Filters aligned with Spectrum webhook payloads (messages event).
- *
- * Spectrum's webhook today only delivers `text` and `attachment` content
- * types, with attachments discriminated by MIME prefix (image/audio/video/
- * application). The SDK's content union also includes reaction, richlink,
- * poll, poll_option, contact, reply, edit, group, custom, and typing — these
- * may begin arriving on webhooks in a future release. We list them here so
- * workflows can opt in today and start receiving them with no node update.
- */
 const CONTENT_TYPE_OPTIONS = [
 	{ name: 'All Messages', value: '*', description: 'Every inbound message on this webhook' },
 	{ name: 'Text', value: 'text', description: 'Plain text bodies' },
@@ -97,7 +89,6 @@ const CONTENT_TYPE_OPTIONS = [
 	},
 ];
 
-/** Classify an attachment by its MIME prefix into one of our display buckets. */
 function classifyAttachment(mime: string): 'photo' | 'voice' | 'video' | 'document' | 'attachment-other' {
 	if (mime.startsWith('image/')) return 'photo';
 	if (mime.startsWith('audio/')) return 'voice';
@@ -115,7 +106,6 @@ function matchesContentTypeFilter(
 	const mime = String(content.mimeType ?? '');
 	for (const sel of selected) {
 		if (sel === rawType) return true;
-		// Map the rawType "attachment" onto our split buckets.
 		if (rawType === 'attachment' && sel === classifyAttachment(mime)) return true;
 	}
 	return false;
@@ -131,6 +121,27 @@ interface StoredWebhook {
 	id: string;
 	signingSecret: string;
 	webhookUrl: string;
+}
+
+function resolveSigningSecret(
+	stored: StoredWebhook,
+	webhookIdHeader: string | undefined,
+): string | undefined {
+	if (!webhookIdHeader || webhookIdHeader === stored.id) {
+		return stored.signingSecret;
+	}
+	return undefined;
+}
+
+function shouldDeleteRemoteWebhook(
+	w: { id: string; webhookUrl: string },
+	webhookUrl: string,
+	nodeWebhookId: string | undefined,
+): boolean {
+	if (w.webhookUrl === webhookUrl) return true;
+	if (nodeWebhookId && w.webhookUrl.includes(`/${nodeWebhookId}/`)) return true;
+	if (isDevTunnelWebhookUrl(w.webhookUrl)) return true;
+	return false;
 }
 
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
@@ -164,7 +175,14 @@ export class PhotonIMessageTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'When this trigger is activated, n8n registers a webhook URL with Spectrum (<a href="https://docs.photon.codes/webhooks/overview" target="_blank">docs</a>). Deactivating the trigger removes it. Spectrum signs each delivery with HMAC-SHA256 — verification is automatic.',
+					'<b>Test mode:</b> one message per <b>Test this trigger</b> click (n8n limit). <b>Production:</b> toggle <b>Active</b> for a persistent webhook. After restarting <code>dev:tunnel</code>, re-test or toggle Active off/on.',
+				name: 'webhookModeNotice',
+				type: 'notice',
+				default: '',
+			},
+			{
+				displayName:
+					'Registered webhooks show on app.photon.codes under the <b>Photon dashboard project</b> from your credential (usually <b>n8n iMessage</b> — not codex or other projects). Spectrum signs each delivery with HMAC-SHA256 — verification is automatic (<a href="https://docs.photon.codes/webhooks/overview" target="_blank">docs</a>).',
 				name: 'setupNotice',
 				type: 'notice',
 				default: '',
@@ -216,13 +234,23 @@ export class PhotonIMessageTrigger implements INodeType {
 	webhookMethods = {
 		default: {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
+				const webhookUrl = this.getNodeWebhookUrl('default');
+				if (!webhookUrl) return false;
+
 				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
 				const stored = staticData.webhook as StoredWebhook | undefined;
-				if (!stored?.id) return false;
+				if (!stored?.id || !stored.signingSecret) return false;
+				if (stored.webhookUrl !== webhookUrl) return false;
 
 				const creds = await getSpectrumCredentials(this);
 				const webhooks = await listWebhooks(this, creds);
-				return webhooks.some((w) => w.id === stored.id);
+				const remote = webhooks.find((w) => w.id === stored.id && w.webhookUrl === webhookUrl);
+				if (!remote) return false;
+
+				const staleDevTunnels = webhooks.some(
+					(w) => w.id !== stored.id && isDevTunnelWebhookUrl(w.webhookUrl),
+				);
+				return !staleDevTunnels;
 			},
 
 			async create(this: IHookFunctions): Promise<boolean> {
@@ -230,19 +258,37 @@ export class PhotonIMessageTrigger implements INodeType {
 				if (!webhookUrl) return false;
 
 				const creds = await getSpectrumCredentials(this);
+				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
+				const stored = staticData.webhook as StoredWebhook | undefined;
+				const remote = await listWebhooks(this, creds);
+
+				if (stored?.id) {
+					const stale = remote.find((w) => w.id === stored.id);
+					if (stale && stale.webhookUrl !== webhookUrl) {
+						await deleteWebhook(this, creds, stored.id);
+					}
+				}
+				const nodeWebhookId = this.getNode().webhookId;
+				for (const w of remote) {
+					if (shouldDeleteRemoteWebhook(w, webhookUrl, nodeWebhookId)) {
+						await deleteWebhook(this, creds, w.id);
+					}
+				}
+
 				const registration: WebhookRegistration = await registerWebhook(
 					this,
 					creds,
 					webhookUrl,
 				);
 
-				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
-				const stored: StoredWebhook = {
+				staticData.webhook = {
 					id: registration.id,
 					signingSecret: registration.signingSecret,
-					webhookUrl: registration.webhookUrl,
-				};
-				staticData.webhook = stored;
+					webhookUrl: registration.webhookUrl || webhookUrl,
+				} satisfies StoredWebhook;
+				this.logger.info(
+					`[iMessage by Photon Trigger] Registered Spectrum webhook ${registration.id} → ${webhookUrl}`,
+				);
 				return true;
 			},
 
@@ -272,14 +318,20 @@ export class PhotonIMessageTrigger implements INodeType {
 				// ignore
 			}
 		}
-		const rawBody = (req.rawBody ?? '').toString();
-		const fallbackBody = rawBody || JSON.stringify(req.body ?? {});
 
-		const headers = this.getHeaderData() as Record<string, string | undefined>;
-		const signature = headers['x-spectrum-signature'];
-		const timestamp = headers['x-spectrum-timestamp'];
-		const eventHeader = headers['x-spectrum-event'];
-		const webhookIdHeader = headers['x-spectrum-webhook-id'];
+		const rawBodyBuf = req.rawBody;
+		const rawBody =
+			rawBodyBuf instanceof Buffer
+				? rawBodyBuf.toString('utf8')
+				: typeof rawBodyBuf === 'string'
+					? rawBodyBuf
+					: '';
+
+		const headers = this.getHeaderData() as Record<string, string | string[] | undefined>;
+		const signature = getSpectrumHeader(headers, 'x-spectrum-signature');
+		const timestamp = getSpectrumHeader(headers, 'x-spectrum-timestamp');
+		const eventHeader = getSpectrumHeader(headers, 'x-spectrum-event');
+		const webhookIdHeader = getSpectrumHeader(headers, 'x-spectrum-webhook-id');
 
 		const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
 		const stored = staticData.webhook as StoredWebhook | undefined;
@@ -291,17 +343,31 @@ export class PhotonIMessageTrigger implements INodeType {
 			};
 		}
 
+		if (!rawBody) {
+			return {
+				webhookResponse: 'signature verification failed: missing-body',
+				noWebhookResponse: false,
+			};
+		}
+
+		const signingSecret = resolveSigningSecret(stored, webhookIdHeader);
+		if (!signingSecret) {
+			return {
+				webhookResponse: 'signature verification failed: unknown-webhook-id',
+				noWebhookResponse: false,
+			};
+		}
+
 		const verification = verifySpectrumWebhook({
-			rawBody: fallbackBody,
-			signingSecret: stored.signingSecret,
+			rawBody,
+			signingSecret,
 			signature,
 			timestamp,
 		});
 
 		if (!verification.ok) {
 			this.logger.warn(
-				`[iMessage by Photon Trigger] Spectrum webhook signature verification failed: ${verification.reason}. ` +
-					'Webhook ignored. This usually means the registered signing secret no longer matches the active webhook — re-activate the trigger to rotate it.',
+				`[iMessage by Photon Trigger] Signature verification failed (${verification.reason})`,
 			);
 			return {
 				webhookResponse: `signature verification failed: ${verification.reason}`,
@@ -309,21 +375,24 @@ export class PhotonIMessageTrigger implements INodeType {
 			};
 		}
 
-		const payload = req.body as
-			| {
-					event?: string;
-					space?: { id?: string; platform?: string };
-					message?: {
-						id?: string;
-						platform?: string;
-						direction?: string;
-						timestamp?: string;
-						sender?: { id?: string; platform?: string };
-						space?: { id?: string; platform?: string };
-						content?: { type?: string; [key: string]: unknown };
-					};
-			  }
-			| undefined;
+		let payload: {
+			event?: string;
+			space?: { id?: string; platform?: string };
+			message?: {
+				id?: string;
+				platform?: string;
+				direction?: string;
+				timestamp?: string;
+				sender?: { id?: string; platform?: string };
+				space?: { id?: string; platform?: string };
+				content?: { type?: string; [key: string]: unknown };
+			};
+		};
+		try {
+			payload = JSON.parse(rawBody) as typeof payload;
+		} catch {
+			return { webhookResponse: 'invalid json body', noWebhookResponse: false };
+		}
 
 		if (!payload?.event) {
 			return { webhookResponse: 'missing event field', noWebhookResponse: false };
@@ -373,8 +442,6 @@ export class PhotonIMessageTrigger implements INodeType {
 			return { webhookResponse: 'ok', noWebhookResponse: false };
 		}
 		if (filters.spaceType && filters.spaceType !== 'any') {
-			// Inferred from id shape: DMs use `any;-;<addr>`, groups use a chat
-			// GUID. Webhook payload doesn't yet expose space-type directly.
 			const isDm = spaceId.includes(';-;');
 			const isGroup = !isDm && spaceId !== '';
 			if (filters.spaceType === 'dm' && !isDm) {
@@ -394,8 +461,6 @@ export class PhotonIMessageTrigger implements INodeType {
 				platform: payload.message?.platform ?? 'iMessage',
 				direction: payload.message?.direction ?? 'inbound',
 				spaceId: spaceId || null,
-				// `space.id` shape is the only signal currently surfaced for DM vs.
-				// group; webhook payloads don't include `space.type` today.
 				spaceType: spaceId.includes(';-;') ? 'dm' : spaceId ? 'group' : null,
 				sender: senderAddress || null,
 				senderPlatform: payload.message?.sender?.platform ?? null,

@@ -1,5 +1,7 @@
 import type { IHttpRequestHelper } from 'n8n-workflow';
 
+import { photonHttpsJson } from './photonHttp';
+
 import type { IMessageInfoData, SpectrumEnvelope } from './spectrumTypes';
 
 const HTTP_TIMEOUT_MS = 20_000;
@@ -30,7 +32,7 @@ interface SharedUser {
 }
 
 async function spectrumGet<T>(
-	helper: IHttpRequestHelper,
+	_helper: IHttpRequestHelper,
 	apiHost: string,
 	projectId: string,
 	projectSecret: string,
@@ -39,16 +41,17 @@ async function spectrumGet<T>(
 	const host = apiHost.replace(/\/+$/, '');
 	const auth =
 		'Basic ' + Buffer.from(`${projectId}:${projectSecret}`).toString('base64');
-	const raw = (await helper.helpers.httpRequest({
-		method: 'GET',
-		url: `${host}/projects/${encodeURIComponent(projectId)}${path}`,
-		headers: {
-			Authorization: auth,
-			Accept: 'application/json',
+	const raw = await photonHttpsJson<SpectrumEnvelope<T> | T>(
+		`${host}/projects/${encodeURIComponent(projectId)}${path}`,
+		{
+			method: 'GET',
+			headers: {
+				Authorization: auth,
+				Accept: 'application/json',
+			},
+			timeout: HTTP_TIMEOUT_MS,
 		},
-		json: true,
-		timeout: HTTP_TIMEOUT_MS,
-	})) as SpectrumEnvelope<T> | T;
+	);
 	if (raw && typeof raw === 'object' && 'data' in raw) {
 		return (raw as SpectrumEnvelope<T>).data;
 	}
@@ -172,11 +175,11 @@ export function buildLineStatus(
 	}
 	if (lines.lineMode === 'shared') {
 		return yourPhone
-			? 'No line assigned yet for this mobile — click Retry after saving your number.'
-			: 'Shared plan: enter your mobile below, Save, then Retry to get your iMessage line.';
+			? 'No line assigned yet for this mobile — click Save again after saving your number.'
+			: 'Shared plan: enter your mobile below, Save, then Save again to get your iMessage line.';
 	}
 	if (lines.imessageLines) return lines.imessageLines;
-	return 'Click Retry to load your project line from Spectrum.';
+	return 'Click Save again to load your project line from Spectrum.';
 }
 
 export async function lineInfoFields(
