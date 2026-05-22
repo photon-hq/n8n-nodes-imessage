@@ -10,10 +10,15 @@ import { NodeConnectionTypes } from 'n8n-workflow';
 
 import { getSpectrumCredentials } from './lib/credentials';
 import { getSpectrumHeader } from './lib/spectrumHeaders';
-import { assertPublicWebhookUrl, isDevTunnelWebhookUrl, isLocalWebhookUrl } from './lib/webhookUrl';
+import { assertPublicWebhookUrl, isLocalWebhookUrl } from './lib/webhookUrl';
+import {
+	hasStaleRemoteWebhooks,
+	isWebhookRegistered,
+	type StoredWebhook,
+	syncSpectrumWebhook,
+} from './lib/webhookSync';
 import { verifySpectrumWebhook } from './lib/verifySignature';
-import { deleteWebhook, listWebhooks, registerWebhook } from './lib/webhookApi';
-import type { WebhookRegistration } from './lib/types';
+import { deleteWebhook, listWebhooks } from './lib/webhookApi';
 
 const CONTENT_TYPE_OPTIONS = [
 	{ name: 'All Messages', value: '*', description: 'Every inbound message on this webhook' },
@@ -118,12 +123,6 @@ const SPACE_TYPE_OPTIONS = [
 	{ name: 'Group', value: 'group', description: 'Group chats only' },
 ];
 
-interface StoredWebhook {
-	id: string;
-	signingSecret: string;
-	webhookUrl: string;
-}
-
 function resolveSigningSecret(
 	stored: StoredWebhook,
 	webhookIdHeader: string | undefined,
@@ -132,18 +131,6 @@ function resolveSigningSecret(
 		return stored.signingSecret;
 	}
 	return undefined;
-}
-
-function shouldDeleteRemoteWebhook(
-	w: { id: string; webhookUrl: string },
-	webhookUrl: string,
-	nodeWebhookId: string | undefined,
-): boolean {
-	if (w.webhookUrl === webhookUrl) return true;
-	if (nodeWebhookId && w.webhookUrl.includes(`/${nodeWebhookId}/`)) return true;
-	if (isLocalWebhookUrl(w.webhookUrl)) return true;
-	if (isDevTunnelWebhookUrl(w.webhookUrl)) return true;
-	return false;
 }
 
 function webhookFailureMessage(
@@ -203,9 +190,8 @@ export class PhotonIMessageTrigger implements INodeType {
 			{
 				displayName:
 					'<b>n8n Cloud:</b> your instance URL is used automatically — toggle workflow <b>Active</b>. ' +
-					'<b>Self-hosted on this machine:</b> localhost will not work; Spectrum must reach a public URL. ' +
-					'Dev: <code>npm run dev:tunnel</code> (ngrok + WEBHOOK_URL). Production: set <code>WEBHOOK_URL=https://your-domain</code> when starting n8n. ' +
-					'Then toggle <b>Active</b> or <b>Test this trigger</b>. Test mode: one message per Test click.',
+					'<b>Self-hosted local:</b> use <code>npm run dev:tunnel</code> or set <code>WEBHOOK_URL</code> — localhost is blocked. ' +
+					'Spectrum webhooks re-sync on workflow activation and when the public URL changes. Test mode: one message per Test click.',
 				name: 'webhookModeNotice',
 				type: 'notice',
 				default: '',
@@ -258,23 +244,17 @@ export class PhotonIMessageTrigger implements INodeType {
 		default: {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
 				const webhookUrl = this.getNodeWebhookUrl('default');
-				if (!webhookUrl) return false;
-				if (isLocalWebhookUrl(webhookUrl)) return false;
+				if (!webhookUrl || isLocalWebhookUrl(webhookUrl)) return false;
 
 				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
 				const stored = staticData.webhook as StoredWebhook | undefined;
-				if (!stored?.id || !stored.signingSecret) return false;
-				if (stored.webhookUrl !== webhookUrl) return false;
-
 				const creds = await getSpectrumCredentials(this);
-				const webhooks = await listWebhooks(this, creds);
-				const remote = webhooks.find((w) => w.id === stored.id && w.webhookUrl === webhookUrl);
-				if (!remote) return false;
+				const remote = await listWebhooks(this, creds);
+				const nodeWebhookId = this.getNode().webhookId;
 
-				const staleDevTunnels = webhooks.some(
-					(w) => w.id !== stored.id && isDevTunnelWebhookUrl(w.webhookUrl),
-				);
-				return !staleDevTunnels;
+				if (!isWebhookRegistered(remote, stored, webhookUrl)) return false;
+				if (hasStaleRemoteWebhooks(remote, stored, webhookUrl, nodeWebhookId)) return false;
+				return true;
 			},
 
 			async create(this: IHookFunctions): Promise<boolean> {
@@ -286,34 +266,19 @@ export class PhotonIMessageTrigger implements INodeType {
 				const creds = await getSpectrumCredentials(this);
 				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
 				const stored = staticData.webhook as StoredWebhook | undefined;
-				const remote = await listWebhooks(this, creds);
-
-				if (stored?.id) {
-					const stale = remote.find((w) => w.id === stored.id);
-					if (stale && stale.webhookUrl !== webhookUrl) {
-						await deleteWebhook(this, creds, stored.id);
-					}
-				}
 				const nodeWebhookId = this.getNode().webhookId;
-				for (const w of remote) {
-					if (shouldDeleteRemoteWebhook(w, webhookUrl, nodeWebhookId)) {
-						await deleteWebhook(this, creds, w.id);
-					}
-				}
 
-				const registration: WebhookRegistration = await registerWebhook(
+				const synced = await syncSpectrumWebhook(
 					this,
 					creds,
 					webhookUrl,
+					nodeWebhookId,
+					stored,
 				);
 
-				staticData.webhook = {
-					id: registration.id,
-					signingSecret: registration.signingSecret,
-					webhookUrl: registration.webhookUrl || webhookUrl,
-				} satisfies StoredWebhook;
+				staticData.webhook = synced;
 				this.logger.info(
-					`[iMessage by Photon Trigger] Registered Spectrum webhook ${registration.id} → ${webhookUrl}`,
+					`[iMessage by Photon Trigger] Spectrum webhook ${synced.id} synced → ${webhookUrl}`,
 				);
 				return true;
 			},

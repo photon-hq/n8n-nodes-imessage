@@ -22,6 +22,7 @@ const RESET = '\x1b[0m';
 
 const children = [];
 let shuttingDown = false;
+let restartingN8n = false;
 let tunnelKind = 'unknown';
 
 function findBin(name) {
@@ -143,6 +144,60 @@ async function readNgrokPublicUrl() {
 	return https.public_url.replace(/\/+$/, '');
 }
 
+function spawnN8nDev(n8nNodeBin, publicUrl) {
+	return spawn(n8nNodeBin, ['dev'], {
+		cwd: ROOT,
+		env: {
+			...process.env,
+			WEBHOOK_URL: publicUrl,
+			N8N_PORT,
+		},
+		stdio: 'inherit',
+	});
+}
+
+async function restartN8nDev(n8nNodeBin, devRef, previousUrl, newUrl, onDevExit) {
+	console.log('');
+	console.log(`${YELLOW}!${RESET} Tunnel URL changed — restarting n8n with updated WEBHOOK_URL`);
+	console.log(`  ${previousUrl}`);
+	console.log(`  ${newUrl}`);
+
+	const oldDev = devRef.current;
+	if (oldDev && oldDev.exitCode === null && !oldDev.killed) {
+		restartingN8n = true;
+		oldDev.removeAllListeners('exit');
+		const idx = children.indexOf(oldDev);
+		if (idx >= 0) children.splice(idx, 1);
+		try {
+			oldDev.kill('SIGTERM');
+		} catch {
+			// ignore
+		}
+		await sleep(2000);
+		if (portInUse(N8N_PORT)) {
+			killPort(N8N_PORT);
+			await sleep(1000);
+		}
+		restartingN8n = false;
+	}
+
+	const dev = track(spawnN8nDev(n8nNodeBin, newUrl));
+	dev.on('exit', onDevExit);
+	devRef.current = dev;
+
+	try {
+		await waitForN8nLocal();
+		await verifyTunnelForwards(newUrl);
+		console.log(
+			`${GREEN}✓${RESET} n8n restarted — active workflows will re-register Spectrum webhooks at the new URL`,
+		);
+	} catch (err) {
+		console.error(
+			`${YELLOW}Restart verification failed:${RESET} ${(err instanceof Error ? err.message : err) || err}`,
+		);
+	}
+}
+
 function startNgrok(bin) {
 	console.log(`${CYAN}▸${RESET} Starting ngrok tunnel → localhost:${N8N_PORT}`);
 	tunnelKind = 'ngrok';
@@ -244,28 +299,31 @@ async function main() {
 	console.log(`${DIM}Editor (local only): http://localhost:${N8N_PORT}${RESET}`);
 	console.log('');
 	console.warn(
-		`${YELLOW}!${RESET} After n8n starts, click **Test this trigger** (or toggle workflow Active). ` +
-			'If you restart this script, re-test so Spectrum gets the new URL.',
+		`${YELLOW}!${RESET} Activate the workflow (or click **Test this trigger**). ` +
+			'Spectrum webhooks re-sync on activation; ngrok URL changes restart n8n automatically.',
 	);
 	console.log('');
 
+	const devRef = { current: null };
+	let currentPublicUrl = publicUrl;
+	let pollTimer;
+
+	const onDevExit = (code, signal) => {
+		if (restartingN8n) return;
+		clearInterval(pollTimer);
+		if (shuttingDown) return;
+		if (signal) shutdown(1);
+		else shutdown(code ?? 0);
+	};
+
 	console.log(`${CYAN}▸${RESET} Starting n8n-node dev…`);
-	const dev = track(
-		spawn(n8nNodeBin, ['dev'], {
-			cwd: ROOT,
-			env: {
-				...process.env,
-				WEBHOOK_URL: publicUrl,
-				N8N_PORT,
-			},
-			stdio: 'inherit',
-		}),
-	);
+	devRef.current = track(spawnN8nDev(n8nNodeBin, currentPublicUrl));
+	devRef.current.on('exit', onDevExit);
 
 	try {
 		await waitForN8nLocal();
-		await verifyTunnelForwards(publicUrl);
-		console.log(`${GREEN}✓${RESET} Tunnel verified — ${publicUrl} reaches n8n`);
+		await verifyTunnelForwards(currentPublicUrl);
+		console.log(`${GREEN}✓${RESET} Tunnel verified — ${currentPublicUrl} reaches n8n`);
 	} catch (err) {
 		console.error(
 			`${YELLOW}Tunnel verification failed:${RESET} ${(err instanceof Error ? err.message : err) || err}`,
@@ -279,25 +337,33 @@ async function main() {
 		return;
 	}
 
-	const healthTimer = setInterval(async () => {
+	pollTimer = setInterval(async () => {
 		if (shuttingDown) return;
+
+		if (tunnelKind === 'ngrok') {
+			try {
+				const latest = await readNgrokPublicUrl();
+				if (latest !== currentPublicUrl) {
+					const previousUrl = currentPublicUrl;
+					currentPublicUrl = latest;
+					await restartN8nDev(n8nNodeBin, devRef, previousUrl, latest, onDevExit);
+					return;
+				}
+			} catch {
+				console.warn(`${YELLOW}!${RESET} Could not read ngrok API — URL change detection paused briefly.`);
+			}
+		}
+
 		try {
-			await verifyTunnelForwards(publicUrl);
+			await verifyTunnelForwards(currentPublicUrl);
 		} catch {
 			console.warn(
-				`${YELLOW}!${RESET} Tunnel stopped forwarding to n8n (${publicUrl}). ` +
-					'Restart npm run dev:tunnel and click Test this trigger again.',
+				`${YELLOW}!${RESET} Tunnel stopped forwarding to n8n (${currentPublicUrl}). ` +
+					'Restart npm run dev:tunnel and re-activate the workflow.',
 			);
 		}
-	}, 120_000);
-	healthTimer.unref();
-
-	dev.on('exit', (code, signal) => {
-		clearInterval(healthTimer);
-		if (shuttingDown) return;
-		if (signal) shutdown(1);
-		else shutdown(code ?? 0);
-	});
+	}, 90_000);
+	pollTimer.unref();
 
 	tunnelProc.on('exit', (code) => {
 		if (shuttingDown) return;
