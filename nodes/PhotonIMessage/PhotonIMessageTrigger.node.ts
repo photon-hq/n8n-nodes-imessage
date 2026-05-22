@@ -20,81 +20,6 @@ import {
 import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks } from './lib/webhookApi';
 
-const CONTENT_TYPE_OPTIONS = [
-	{ name: 'All Messages', value: '*', description: 'Every inbound message on this webhook' },
-	{ name: 'Text', value: 'text', description: 'Plain text bodies' },
-	{
-		name: 'Photo (Image Attachment)',
-		value: 'photo',
-		description: 'Image attachments (mimeType image/*: HEIC, JPEG, PNG, etc.)',
-	},
-	{
-		name: 'Voice Note / Audio',
-		value: 'voice',
-		description: 'Audio attachments (mimeType audio/*: M4A, etc.). Includes iMessage voice memos.',
-	},
-	{
-		name: 'Video',
-		value: 'video',
-		description: 'Video attachments (mimeType video/*: MP4, MOV, etc.)',
-	},
-	{
-		name: 'Document / File',
-		value: 'document',
-		description: 'Non-media attachments (mimeType application/*: PDF, ZIP, etc.)',
-	},
-	{
-		name: 'Other Attachment',
-		value: 'attachment-other',
-		description: 'Any attachment whose mimeType doesn\'t fall into the categories above',
-	},
-	{
-		name: 'Reaction (Tapback)',
-		value: 'reaction',
-		description: 'Tapback reactions on a previous message. Forward-compat: not delivered on webhooks today but reserved for when Spectrum adds them.',
-	},
-	{
-		name: 'Reply (Threaded)',
-		value: 'reply',
-		description: 'Threaded reply wrapping inner content. Forward-compat.',
-	},
-	{
-		name: 'Edit',
-		value: 'edit',
-		description: 'Rewrite of a previously-sent message. Forward-compat.',
-	},
-	{
-		name: 'Rich Link Preview',
-		value: 'richlink',
-		description: 'Open Graph rich link card. Forward-compat.',
-	},
-	{
-		name: 'Poll',
-		value: 'poll',
-		description: 'A new poll posted to the conversation. Forward-compat.',
-	},
-	{
-		name: 'Poll Vote',
-		value: 'poll_option',
-		description: 'A vote (or unvote) on a poll option. Forward-compat.',
-	},
-	{
-		name: 'Contact Card',
-		value: 'contact',
-		description: 'Shared contact card (vCard). Forward-compat.',
-	},
-	{
-		name: 'Group (Album / Bundle)',
-		value: 'group',
-		description: 'Multi-item group bundle (e.g. photo album). Forward-compat.',
-	},
-	{
-		name: 'Custom (Platform-Specific)',
-		value: 'custom',
-		description: 'Provider-defined custom payload. Forward-compat.',
-	},
-];
-
 function classifyAttachment(mime: string): 'photo' | 'voice' | 'video' | 'document' | 'attachment-other' {
 	if (mime.startsWith('image/')) return 'photo';
 	if (mime.startsWith('audio/')) return 'voice';
@@ -102,26 +27,6 @@ function classifyAttachment(mime: string): 'photo' | 'voice' | 'video' | 'docume
 	if (mime.startsWith('application/')) return 'document';
 	return 'attachment-other';
 }
-
-function matchesContentTypeFilter(
-	selected: string[],
-	rawType: string,
-	content: Record<string, unknown>,
-): boolean {
-	if (selected.length === 0 || selected.includes('*')) return true;
-	const mime = String(content.mimeType ?? '');
-	for (const sel of selected) {
-		if (sel === rawType) return true;
-		if (rawType === 'attachment' && sel === classifyAttachment(mime)) return true;
-	}
-	return false;
-}
-
-const SPACE_TYPE_OPTIONS = [
-	{ name: 'Any', value: 'any' },
-	{ name: 'DM', value: 'dm', description: 'One-to-one conversations only' },
-	{ name: 'Group', value: 'group', description: 'Group chats only' },
-];
 
 function resolveSigningSecret(
 	stored: StoredWebhook,
@@ -195,47 +100,6 @@ export class PhotonIMessageTrigger implements INodeType {
 				name: 'webhookModeNotice',
 				type: 'notice',
 				default: '',
-			},
-			{
-				displayName: 'Content Types',
-				name: 'contentTypes',
-				type: 'multiOptions',
-				options: CONTENT_TYPE_OPTIONS,
-				default: ['text'],
-				description:
-					'Filter inbound messages. Spectrum today delivers text and attachments; other types are reserved for forward compatibility.',
-			},
-			{
-				displayName: 'Filters',
-				name: 'filters',
-				type: 'collection',
-				placeholder: 'Add Filter',
-				default: {},
-				options: [
-					{
-						displayName: 'Sender Address',
-						name: 'senderAddress',
-						type: 'string',
-						default: '',
-						placeholder: '+15551234567 or alice@example.com',
-						description: 'Only trigger when the sender matches (case-insensitive, exact match)',
-					},
-					{
-						displayName: 'Space Type',
-						name: 'spaceType',
-						type: 'options',
-						options: SPACE_TYPE_OPTIONS,
-						default: 'any',
-					},
-					{
-						displayName: 'Space ID',
-						name: 'spaceId',
-						type: 'string',
-						default: '',
-						placeholder: 'any;-;+15551234567',
-						description: 'Only trigger for messages in this exact Space ID',
-					},
-				],
 			},
 		],
 	};
@@ -398,17 +262,6 @@ export class PhotonIMessageTrigger implements INodeType {
 		const content = payload.message?.content ?? {};
 		const rawContentType = payload.message?.content?.type ?? '';
 
-		const contentTypes = this.getNodeParameter('contentTypes', []) as string[];
-		if (
-			!matchesContentTypeFilter(
-				contentTypes,
-				rawContentType,
-				content as Record<string, unknown>,
-			)
-		) {
-			return { webhookResponse: 'ok', noWebhookResponse: false };
-		}
-
 		const mime = String(content.mimeType ?? '');
 		const attachmentKind =
 			rawContentType === 'attachment' ? classifyAttachment(mime) : undefined;
@@ -416,32 +269,6 @@ export class PhotonIMessageTrigger implements INodeType {
 			rawContentType === 'attachment' && attachmentKind === 'voice'
 				? 'voice'
 				: rawContentType;
-
-		const filters = this.getNodeParameter('filters', {}) as {
-			senderAddress?: string;
-			spaceType?: 'any' | 'dm' | 'group';
-			spaceId?: string;
-		};
-
-		if (
-			filters.senderAddress &&
-			filters.senderAddress.toLowerCase() !== senderAddress.toLowerCase()
-		) {
-			return { webhookResponse: 'ok', noWebhookResponse: false };
-		}
-		if (filters.spaceId && filters.spaceId !== spaceId) {
-			return { webhookResponse: 'ok', noWebhookResponse: false };
-		}
-		if (filters.spaceType && filters.spaceType !== 'any') {
-			const isDm = spaceId.includes(';-;');
-			const isGroup = !isDm && spaceId !== '';
-			if (filters.spaceType === 'dm' && !isDm) {
-				return { webhookResponse: 'ok', noWebhookResponse: false };
-			}
-			if (filters.spaceType === 'group' && !isGroup) {
-				return { webhookResponse: 'ok', noWebhookResponse: false };
-			}
-		}
 
 		const output: INodeExecutionData = {
 			json: {
