@@ -10,7 +10,7 @@
 // esbuild can resolve and inline both module specifiers.
 
 import { build } from 'esbuild';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -77,8 +77,29 @@ async function bundle({ src, out }) {
 		sourcemap: false,
 		logLevel: 'warning',
 		legalComments: 'eof',
+		banner: {
+			js: 'var __photonImportMetaUrl = require("url").pathToFileURL(__filename).href;',
+		},
 		plugins: [spectrumImportPlugin],
 	});
+	await patchImportMetaUrl(out);
+}
+
+/** esbuild CJS output sets `import_meta = {}` for @photon-ai/imessage-kit — breaks createRequire. */
+async function patchImportMetaUrl(outfile) {
+	const broken = 'import_meta = {}';
+	const fixed = 'import_meta = { url: __photonImportMetaUrl }';
+	let code = await readFile(outfile, 'utf8');
+	if (!code.includes(broken)) {
+		if (code.includes('createRequire)(import_meta.url)')) {
+			throw new Error(
+				`bundle-spectrum: ${outfile} uses import_meta.url but has no "${broken}" — update patchImportMetaUrl`,
+			);
+		}
+		return;
+	}
+	code = code.replaceAll(broken, fixed);
+	await writeFile(outfile, code);
 }
 
 for (const ep of entryPoints) {

@@ -94,9 +94,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'<b>n8n Cloud:</b> your instance URL is used automatically — toggle workflow <b>Active</b>. ' +
-					'<b>Self-hosted local:</b> use <code>npm run dev:tunnel</code> or set <code>WEBHOOK_URL</code> — localhost is blocked. ' +
-					'Spectrum webhooks re-sync on workflow activation and when the public URL changes. Test mode: one message per Test click.',
+					'<b>Local dev:</b> run <code>npm run dev:tunnel</code> then toggle this workflow <b>Active</b>. <b>n8n Cloud:</b> just toggle Active. Test mode catches one message per Test click.',
 				name: 'webhookModeNotice',
 				type: 'notice',
 				default: '',

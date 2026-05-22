@@ -20,6 +20,8 @@ import {
 	type SpectrumCredentials,
 } from './lib/types';
 
+/* eslint-disable n8n-nodes-base/node-param-operation-option-without-action -- advanced ops are hidden behind Show Advanced Actions; only simpleOperation entries appear in the node picker */
+
 const REACTION_OPTIONS = [
 	...TAPBACKS.map((t) => ({
 		name: t.charAt(0).toUpperCase() + t.slice(1),
@@ -67,7 +69,7 @@ export class PhotonIMessage implements INodeType {
 		group: ['output'],
 		version: 1,
 		subtitle:
-			'={{ ({"sendMessage":"Send Message","sendAttachment":"Send Attachment","sendVoice":"Send Voice Note","sendContact":"Share Contact","sendRichLink":"Send Rich Link","sendGroup":"Send Group (Album)","sendCustom":"Send Custom Payload","getMessage":"Get Message","editMessage":"Edit Message","reactToMessage":"React","replyToMessage":"Reply","createSpace":"Create / Resolve Space","startTyping":"Start Typing","stopTyping":"Stop Typing","setBackground":"Set Chat Background","wrapWithTyping":"Send With Typing","createPoll":"Create Poll","resolveUser":"Resolve User"}[$parameter["operation"]] || $parameter["operation"]) }}',
+			'={{ $parameter.showAdvanced ? (({"sendMessage":"Send Message","sendAttachment":"Send Attachment","sendVoice":"Send Voice Note","sendContact":"Share Contact","sendRichLink":"Send Rich Link","sendGroup":"Send Group (Album)","sendCustom":"Send Custom Payload","getMessage":"Get Message","editMessage":"Edit Message","reactToMessage":"React","replyToMessage":"Reply","createSpace":"Create / Resolve Space","startTyping":"Start Typing","stopTyping":"Stop Typing","setBackground":"Set Chat Background","wrapWithTyping":"Send With Typing","createPoll":"Create Poll","resolveUser":"Resolve User","shareContact":"Share Contact"}[$parameter.operation] || $parameter.operation)) : (({"sendMessage":"Send Message","replyToMessage":"Reply","reactToMessage":"React"}[$parameter.simpleOperation] || "Send Message")) }}',
 		description: 'Send iMessages, react, reply, edit, share contacts, set chat backgrounds, and more — backed by Spectrum',
 		defaults: { name: 'iMessage by Photon' },
 		inputs: [NodeConnectionTypes.Main],
@@ -81,6 +83,50 @@ export class PhotonIMessage implements INodeType {
 		],
 		properties: [
 			{
+				displayName: 'Show Advanced Actions',
+				name: 'showAdvanced',
+				type: 'boolean',
+				default: false,
+				description:
+					'Whether to show attachments, polls, typing indicators, contact cards, and other power-user actions',
+			},
+			{
+				displayName:
+					'<b>Outbound (no trigger):</b> Manual Trigger → <b>Send Message</b> → enter a phone number. <b>Auto-reply:</b> On iMessage Event → <b>Reply to Message</b> (fields auto-fill).',
+				name: 'workflowNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: { show: { showAdvanced: [false] } },
+			},
+			{
+				displayName: 'Action',
+				name: 'simpleOperation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { showAdvanced: [false] } },
+				options: [
+					{
+						name: 'Send Message',
+						value: 'sendMessage',
+						action: 'Send a message',
+						description: 'Text someone — works with Manual Trigger, no iMessage trigger needed',
+					},
+					{
+						name: 'Reply to Message',
+						value: 'replyToMessage',
+						action: 'Reply in thread',
+						description: 'Reply to an inbound message — wire after On iMessage Event',
+					},
+					{
+						name: 'React to Message',
+						value: 'reactToMessage',
+						action: 'React to a message',
+						description: 'Send a tapback — wire after On iMessage Event',
+					},
+				],
+				default: 'sendMessage',
+			},
+			{
 				displayName: 'Resource',
 				name: 'resource',
 				type: 'options',
@@ -93,6 +139,7 @@ export class PhotonIMessage implements INodeType {
 					{ name: 'User', value: 'user', description: 'Resolve a user by phone or email' },
 				],
 				default: 'message',
+				displayOptions: { show: { showAdvanced: [true] } },
 			},
 
 			// =====================================================================
@@ -103,18 +150,18 @@ export class PhotonIMessage implements INodeType {
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { resource: ['message'] } },
+				displayOptions: { show: { showAdvanced: [true], resource: ['message'] } },
 				options: [
-					{ name: 'Edit Message', value: 'editMessage', action: 'Edit a sent message', description: 'Edit the text of a previously sent message you own' },
-					{ name: 'Get Message', value: 'getMessage', action: 'Get a message by ID', description: 'Look up a message in a space by its ID (returns content, sender, timestamp)' },
-					{ name: 'React to Message', value: 'reactToMessage', action: 'React to a message', description: 'Send a tapback or any custom emoji as a reaction' },
-					{ name: 'Reply to Message', value: 'replyToMessage', action: 'Reply in thread', description: 'Send a threaded reply (text and/or one attachment) to a specific message' },
-					{ name: 'Send Attachment', value: 'sendAttachment', action: 'Send an attachment', description: 'Send a file from a path or n8n binary input' },
-					{ name: 'Send Custom Payload', value: 'sendCustom', action: 'Send a platform specific payload', description: 'Send a raw provider-defined custom content payload (advanced)' },
-					{ name: 'Send Group (Album)', value: 'sendGroup', action: 'Send a bundled group', description: 'Bundle multiple items into one logical unit (album)' },
-					{ name: 'Send Message', value: 'sendMessage', action: 'Send a message', description: 'Send a text message (optionally with an effect)' },
-					{ name: 'Send Rich Link', value: 'sendRichLink', action: 'Send a rich link preview', description: 'Send a URL rendered as a rich link card (Open Graph)' },
-					{ name: 'Send Voice Note', value: 'sendVoice', action: 'Send a voice note', description: 'Send an audio clip rendered as an iMessage voice note' },
+					{ name: 'Edit Message', value: 'editMessage', description: 'Edit the text of a previously sent message you own' },
+					{ name: 'Get Message', value: 'getMessage', description: 'Look up a message in a space by its ID' },
+					{ name: 'React to Message', value: 'reactToMessage', description: 'Send a tapback to a message' },
+					{ name: 'Reply to Message', value: 'replyToMessage', description: 'Send a threaded reply to a message' },
+					{ name: 'Send Attachment', value: 'sendAttachment', description: 'Send a file from a path or n8n binary input' },
+					{ name: 'Send Custom Payload', value: 'sendCustom', description: 'Advanced — raw provider JSON' },
+					{ name: 'Send Group (Album)', value: 'sendGroup', description: 'Bundle multiple items into one logical unit (album)' },
+					{ name: 'Send Message', value: 'sendMessage', description: 'Send a text message (optionally with an effect)' },
+					{ name: 'Send Rich Link', value: 'sendRichLink', description: 'Send a URL rendered as a rich link card (Open Graph)' },
+					{ name: 'Send Voice Note', value: 'sendVoice', description: 'Send an audio clip rendered as an iMessage voice note' },
 				],
 				default: 'sendMessage',
 			},
@@ -126,10 +173,23 @@ export class PhotonIMessage implements INodeType {
 				type: 'string',
 				required: true,
 				default: '',
-				placeholder: '+15551234567 or alice@example.com (comma-separated for group)',
-				description: 'Phone (E.164) or email of the recipient(s). One for a DM, multiple for a group chat.',
+				placeholder: '+15551234567',
+				description:
+					'Phone (+15551234567) or email. When wired after On iMessage Event, map the Sender field from input data.',
+				displayOptions: { show: { showAdvanced: [false], simpleOperation: ['sendMessage'] } },
+			},
+			{
+				displayName: 'Recipients',
+				name: 'recipients',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: '+15551234567',
+				description:
+					'Phone (+15551234567) or email. When wired after On iMessage Event, map the Sender field from input data.',
 				displayOptions: {
 					show: {
+						showAdvanced: [true],
 						resource: ['message'],
 						operation: [
 							'sendMessage',
@@ -153,7 +213,17 @@ export class PhotonIMessage implements INodeType {
 				required: true,
 				default: '',
 				placeholder: 'Hello!',
-				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
+				displayOptions: { show: { showAdvanced: [false], simpleOperation: ['sendMessage'] } },
+			},
+			{
+				displayName: 'Message Text',
+				name: 'text',
+				type: 'string',
+				typeOptions: { rows: 4 },
+				required: true,
+				default: '',
+				placeholder: 'Hello!',
+				displayOptions: { show: { showAdvanced: [true], resource: ['message'], operation: ['sendMessage'] } },
 			},
 			{
 				displayName: 'Additional Fields',
@@ -161,7 +231,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'collection',
 				placeholder: 'Add Field',
 				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'] } },
+				displayOptions: { show: { resource: ['message'], operation: ['sendMessage'], showAdvanced: [true] } },
 				options: [
 					{
 						displayName: 'Effect',
@@ -347,49 +417,71 @@ export class PhotonIMessage implements INodeType {
 				],
 			},
 
-			// --- Reply / Edit / React: all keyed off recipient + message id
+			// --- Reply / Edit / React: keyed off sender + message id from trigger
 			{
-				displayName: 'Recipients',
+				displayName:
+					'Pre-filled from the Trigger when this node is wired right after <b>On iMessage Event</b>.',
+				name: 'replyNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: {
+					show: {
+						showAdvanced: [false],
+						simpleOperation: ['replyToMessage', 'reactToMessage'],
+					},
+				},
+			},
+			{
+				displayName: 'Conversation With',
 				name: 'targetRecipients',
 				type: 'string',
 				required: true,
-				default: '',
-				placeholder: '+15551234567 (DM) or +1...,+1... (group)',
-				description:
-					'Phone/email of the conversation containing the target message. Use `sender` from the Trigger payload for DM replies.',
+				default: '={{ $json.sender }}',
+				placeholder: '={{ $json.sender }}',
+				description: 'Phone or email of whoever sent the inbound message',
 				displayOptions: {
-					show: {
-						resource: ['message'],
-						operation: ['replyToMessage', 'editMessage', 'reactToMessage'],
-					},
+					show: { showAdvanced: [false], simpleOperation: ['replyToMessage', 'reactToMessage'] },
 				},
 			},
 			{
-				displayName: 'Send From Phone',
-				name: 'replyFromPhone',
+				displayName: 'Conversation With',
+				name: 'targetRecipients',
 				type: 'string',
-				default: '',
-				placeholder: '+15559999999',
-				description:
-					'Dedicated lines only — pin to a specific line. Leave blank for shared pool.',
+				required: true,
+				default: '={{ $json.sender }}',
+				placeholder: '={{ $json.sender }}',
+				description: 'Phone or email of whoever sent the inbound message',
 				displayOptions: {
 					show: {
+						showAdvanced: [true],
 						resource: ['message'],
 						operation: ['replyToMessage', 'editMessage', 'reactToMessage'],
 					},
 				},
 			},
 			{
-				displayName: 'Target Message ID',
+				displayName: 'Message ID',
 				name: 'targetMessageId',
 				type: 'string',
 				required: true,
-				default: '',
-				placeholder: 'spc-msg-…',
-				description:
-					'The ID of the message to reply to / react to / edit. Found in Trigger payload as `messageId`.',
+				default: '={{ $json.messageId }}',
+				placeholder: '={{ $json.messageId }}',
+				description: 'The message to reply to, react to, or edit. Auto-filled from the Trigger.',
+				displayOptions: {
+					show: { showAdvanced: [false], simpleOperation: ['replyToMessage', 'reactToMessage'] },
+				},
+			},
+			{
+				displayName: 'Message ID',
+				name: 'targetMessageId',
+				type: 'string',
+				required: true,
+				default: '={{ $json.messageId }}',
+				placeholder: '={{ $json.messageId }}',
+				description: 'The message to reply to, react to, or edit. Auto-filled from the Trigger.',
 				displayOptions: {
 					show: {
+						showAdvanced: [true],
 						resource: ['message'],
 						operation: ['replyToMessage', 'editMessage', 'reactToMessage'],
 					},
@@ -400,9 +492,22 @@ export class PhotonIMessage implements INodeType {
 				name: 'replyText',
 				type: 'string',
 				typeOptions: { rows: 3 },
+				required: true,
 				default: '',
-				description: 'Optional reply text. Combine with an attachment under Additional Fields to send rich threaded replies.',
-				displayOptions: { show: { resource: ['message'], operation: ['replyToMessage'] } },
+				placeholder: 'Thanks for your message!',
+				description: 'The text sent back as a threaded reply',
+				displayOptions: { show: { showAdvanced: [false], simpleOperation: ['replyToMessage'] } },
+			},
+			{
+				displayName: 'Reply Text',
+				name: 'replyText',
+				type: 'string',
+				typeOptions: { rows: 3 },
+				required: true,
+				default: '',
+				placeholder: 'Thanks for your message!',
+				description: 'The text sent back as a threaded reply',
+				displayOptions: { show: { showAdvanced: [true], resource: ['message'], operation: ['replyToMessage'] } },
 			},
 			{
 				displayName: 'Additional Fields',
@@ -410,7 +515,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'collection',
 				placeholder: 'Add Field',
 				default: {},
-				displayOptions: { show: { resource: ['message'], operation: ['replyToMessage'] } },
+				displayOptions: { show: { resource: ['message'], operation: ['replyToMessage'], showAdvanced: [true] } },
 				options: [
 					{
 						displayName: 'Attachment Binary Property',
@@ -440,6 +545,15 @@ export class PhotonIMessage implements INodeType {
 						default: '',
 						description: 'Override displayed filename',
 					},
+					{
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
+						type: 'string',
+						default: '',
+						placeholder: '+15559999999',
+						description:
+							'Optional. Dedicated-line accounts only — leave blank on shared pool plans.',
+					},
 				],
 			},
 			{
@@ -453,6 +567,23 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
 			},
 			{
+				displayName: 'Additional Fields',
+				name: 'editOptions',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
+				displayOptions: { show: { resource: ['message'], operation: ['editMessage'] } },
+				options: [
+					{
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
+						type: 'string',
+						default: '',
+						description: 'Optional. Dedicated-line accounts only.',
+					},
+				],
+			},
+			{
 				displayName: 'Reaction',
 				name: 'reaction',
 				type: 'options',
@@ -460,7 +591,34 @@ export class PhotonIMessage implements INodeType {
 				required: true,
 				default: 'love',
 				description: 'Pick a built-in tapback or "Custom" to enter any emoji or string',
+				displayOptions: { show: { showAdvanced: [false], simpleOperation: ['reactToMessage'] } },
+			},
+			{
+				displayName: 'Reaction',
+				name: 'reaction',
+				type: 'options',
+				options: REACTION_OPTIONS,
+				required: true,
+				default: 'love',
+				description: 'Pick a built-in tapback or "Custom" to enter any emoji or string',
+				displayOptions: { show: { showAdvanced: [true], resource: ['message'], operation: ['reactToMessage'] } },
+			},
+			{
+				displayName: 'Additional Fields',
+				name: 'reactOptions',
+				type: 'collection',
+				placeholder: 'Add Field',
+				default: {},
 				displayOptions: { show: { resource: ['message'], operation: ['reactToMessage'] } },
+				options: [
+					{
+						displayName: 'Send From Phone',
+						name: 'fromPhone',
+						type: 'string',
+						default: '',
+						description: 'Optional. Dedicated-line accounts only.',
+					},
+				],
 			},
 			{
 				displayName: 'Custom Reaction',
@@ -472,6 +630,23 @@ export class PhotonIMessage implements INodeType {
 				description: 'Free-form reaction string. iMessage renders most emojis as tapbacks.',
 				displayOptions: {
 					show: {
+						showAdvanced: [false],
+						simpleOperation: ['reactToMessage'],
+						reaction: ['__custom__'],
+					},
+				},
+			},
+			{
+				displayName: 'Custom Reaction',
+				name: 'reactionCustom',
+				type: 'string',
+				required: true,
+				default: '',
+				placeholder: 'e.g. 🔥 or any emoji',
+				description: 'Free-form reaction string. iMessage renders most emojis as tapbacks.',
+				displayOptions: {
+					show: {
+						showAdvanced: [true],
 						resource: ['message'],
 						operation: ['reactToMessage'],
 						reaction: ['__custom__'],
@@ -528,13 +703,13 @@ export class PhotonIMessage implements INodeType {
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { resource: ['space'] } },
+				displayOptions: { show: { showAdvanced: [true], resource: ['space'] } },
 				options: [
-					{ name: 'Create / Resolve Space', value: 'createSpace', action: 'Create or resolve a conversation', description: 'Resolve a DM (one recipient) or group (many recipients) and return its Space ID' },
-					{ name: 'Send With Typing', value: 'wrapWithTyping', action: 'Send while showing typing indicator', description: 'Show the typing indicator, wait a configurable delay, then send a text (uses Spectrum responding helper)' },
-					{ name: 'Set Background', value: 'setBackground', action: 'Set chat background image' },
-					{ name: 'Start Typing', value: 'startTyping', action: 'Start typing indicator' },
-					{ name: 'Stop Typing', value: 'stopTyping', action: 'Stop typing indicator' },
+					{ name: 'Create / Resolve Space', value: 'createSpace', description: 'Resolve a DM (one recipient) or group (many recipients) and return its Space ID' },
+					{ name: 'Send With Typing', value: 'wrapWithTyping', description: 'Show the typing indicator, wait, then send text' },
+					{ name: 'Set Background', value: 'setBackground', description: 'Set chat background image' },
+					{ name: 'Start Typing', value: 'startTyping', description: 'Start typing indicator' },
+					{ name: 'Stop Typing', value: 'stopTyping', description: 'Stop typing indicator' },
 				],
 				default: 'createSpace',
 			},
@@ -624,9 +799,9 @@ export class PhotonIMessage implements INodeType {
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { resource: ['poll'] } },
+				displayOptions: { show: { showAdvanced: [true], resource: ['poll'] } },
 				options: [
-					{ name: 'Create Poll', value: 'createPoll', action: 'Create a poll' },
+					{ name: 'Create Poll', value: 'createPoll' },
 				],
 				default: 'createPoll',
 			},
@@ -689,9 +864,9 @@ export class PhotonIMessage implements INodeType {
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { resource: ['contact'] } },
+				displayOptions: { show: { showAdvanced: [true], resource: ['contact'] } },
 				options: [
-					{ name: 'Share Contact Card', value: 'shareContact', action: 'Share a contact card' },
+					{ name: 'Share Contact Card', value: 'shareContact' },
 				],
 				default: 'shareContact',
 			},
@@ -780,9 +955,13 @@ export class PhotonIMessage implements INodeType {
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { resource: ['user'] } },
+				displayOptions: { show: { showAdvanced: [true], resource: ['user'] } },
 				options: [
-					{ name: 'Resolve User', value: 'resolveUser', action: 'Resolve a user by phone or email', description: 'Look up the platform-specific user shape for a phone or email. Useful for follow-up sends that need a User reference.' },
+					{
+						name: 'Resolve User',
+						value: 'resolveUser',
+						description: 'Look up the platform-specific user shape for a phone or email',
+					},
 				],
 				default: 'resolveUser',
 			},
@@ -804,8 +983,13 @@ export class PhotonIMessage implements INodeType {
 		const returnData: INodeExecutionData[] = [];
 
 		const credentials = await getSpectrumCredentials(this);
-		const resource = this.getNodeParameter('resource', 0) as string;
-		const operation = this.getNodeParameter('operation', 0) as string;
+		const showAdvanced = this.getNodeParameter('showAdvanced', 0, false) as boolean;
+		const resource = showAdvanced
+			? (this.getNodeParameter('resource', 0) as string)
+			: 'message';
+		const operation = showAdvanced
+			? (this.getNodeParameter('operation', 0) as string)
+			: (this.getNodeParameter('simpleOperation', 0, 'sendMessage') as string);
 
 		await withSpectrum(credentials, async (session) => {
 			for (let i = 0; i < items.length; i++) {
@@ -971,15 +1155,16 @@ async function runOne(
 
 		if (operation === 'replyToMessage') {
 			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
-			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
-			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
-			const replyText = ctx.getNodeParameter('replyText', i, '') as string;
 			const replyOpts = ctx.getNodeParameter('replyOptions', i, {}) as {
+				fromPhone?: string;
 				attachmentPath?: string;
 				attachmentBinary?: string;
 				attachmentName?: string;
 				attachmentMime?: string;
 			};
+			const fromPhone = replyOpts.fromPhone ?? '';
+			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
+			const replyText = ctx.getNodeParameter('replyText', i, '') as string;
 			const recipients = splitAddresses(recipientsRaw);
 			const space = await resolveSpace(im, recipients, fromPhone);
 			const target = (await space.getMessage(targetId)) as Parameters<typeof sp.reply>[1];
@@ -1037,7 +1222,8 @@ async function runOne(
 
 		if (operation === 'editMessage') {
 			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
-			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
+			const editOpts = ctx.getNodeParameter('editOptions', i, {}) as { fromPhone?: string };
+			const fromPhone = editOpts.fromPhone ?? '';
 			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
 			const newText = ctx.getNodeParameter('editText', i) as string;
 			const recipients = splitAddresses(recipientsRaw);
@@ -1051,7 +1237,8 @@ async function runOne(
 
 		if (operation === 'reactToMessage') {
 			const recipientsRaw = ctx.getNodeParameter('targetRecipients', i) as string;
-			const fromPhone = ctx.getNodeParameter('replyFromPhone', i, '') as string;
+			const reactOpts = ctx.getNodeParameter('reactOptions', i, {}) as { fromPhone?: string };
+			const fromPhone = reactOpts.fromPhone ?? '';
 			const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
 			const reactionRaw = ctx.getNodeParameter('reaction', i) as string;
 			const reaction =
