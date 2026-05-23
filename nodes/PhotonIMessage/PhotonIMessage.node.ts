@@ -19,8 +19,6 @@ import {
 	type IMessageEffect,
 } from './lib/types';
 
-/* eslint-disable n8n-nodes-base/node-param-operation-option-without-action -- only the four primary actions expose picker entries */
-
 const REACTION_OPTIONS = [
 	...TAPBACKS.map((t) => ({
 		name: t.charAt(0).toUpperCase() + t.slice(1),
