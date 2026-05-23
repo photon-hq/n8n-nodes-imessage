@@ -13,6 +13,7 @@ export interface IMessageLineInfo {
 	imessageLines: string;
 	/** E.164 line end users text to reach this project (first match). */
 	primaryLineNumber: string;
+	lineNumbers: string[];
 }
 
 interface DedicatedLine {
@@ -120,11 +121,13 @@ export async function fetchIMessageLineInfo(
 		);
 		const lines = linesData.lines ?? [];
 		const imessageOnly = lines.filter((l) => l.platform === 'imessage' && l.phoneNumber);
+		const numbers = imessageOnly.map((l) => l.phoneNumber);
 		return {
 			mode: 'dedicated',
 			lineModeLabel: 'Dedicated line(s)',
 			imessageLines: formatDedicatedLines(lines),
-			primaryLineNumber: imessageOnly[0]?.phoneNumber ?? '',
+			primaryLineNumber: numbers[0] ?? '',
+			lineNumbers: numbers,
 		};
 	}
 
@@ -137,11 +140,13 @@ export async function fetchIMessageLineInfo(
 	);
 	const users = usersData.users ?? [];
 	const withLine = users.filter((u) => u.assignedPhoneNumber);
+	const numbers = withLine.map((u) => u.assignedPhoneNumber as string);
 	return {
 		mode: 'shared',
 		lineModeLabel: 'Shared pool (per-contact lines)',
 		imessageLines: formatSharedUsers(users),
-		primaryLineNumber: withLine[0]?.assignedPhoneNumber ?? '',
+		primaryLineNumber: numbers[0] ?? '',
+		lineNumbers: numbers,
 	};
 }
 
@@ -175,6 +180,8 @@ export async function lineInfoFields(
 	lineModeLabel: string;
 	imessageLines: string;
 	primaryLineNumber: string;
+	lineNumbersJson: string;
+	lineCount: number;
 }> {
 	try {
 		const info = await fetchIMessageLineInfo(helper, apiHost, projectId, projectSecret);
@@ -183,12 +190,16 @@ export async function lineInfoFields(
 			lineModeLabel: info.lineModeLabel,
 			imessageLines: info.imessageLines,
 			primaryLineNumber: info.primaryLineNumber,
+			lineNumbersJson: JSON.stringify(info.lineNumbers),
+			lineCount: info.lineNumbers.length,
 		};
 	} catch {
 		return {
 			lineMode: '',
 			lineModeLabel: '',
 			primaryLineNumber: '',
+			lineNumbersJson: '[]',
+			lineCount: 0,
 			imessageLines:
 				'Could not load line numbers from Spectrum. Check the dashboard at app.photon.codes.',
 		};

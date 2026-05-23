@@ -1,6 +1,7 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
@@ -10,7 +11,9 @@ import { ApplicationError, NodeApiError, NodeConnectionTypes, NodeOperationError
 
 import { getSpectrumCredentials } from './lib/credentials';
 import { resolveEffect } from './lib/effects';
+import { getProjectLineOptions, resolveLinePhone } from './lib/lines';
 import { isDeliverabilityError, throwDeliverabilityError } from './lib/outboundErrors';
+import { assertPhoneRecipients } from './lib/recipients';
 import { withSpectrum, type SpectrumSession } from './lib/spectrumClient';
 import {
 	BUBBLE_EFFECTS,
@@ -143,6 +146,13 @@ const TARGET_OPERATIONS = ['replyToMessage', 'editMessage', 'reactToMessage'];
 
 const ATTACHMENT_OPERATIONS = ['sendAttachment', 'sendVoice'];
 
+const LINE_ROUTED_OPERATIONS = [
+	...RECIPIENT_OPERATIONS,
+	...TARGET_OPERATIONS,
+	'wrapWithTyping',
+	'setBackground',
+];
+
 function splitAddresses(raw: string): string[] {
 	return raw
 		.split(',')
@@ -188,43 +198,9 @@ function getRecipients(ctx: IExecuteFunctions, itemIndex: number): string {
 	return primary;
 }
 
-function getFromPhone(ctx: IExecuteFunctions, itemIndex: number, operation: string): string {
-	const expert = ctx.getNodeParameter('showExpertOptions', itemIndex, false) as boolean;
-	if (expert) {
-		return (ctx.getNodeParameter('fromPhone', itemIndex, '') as string) || '';
-	}
-
-	const legacyCollections: Record<string, string> = {
-		sendMessage: 'sendMessageOptions',
-		sendAttachment: 'attachmentOptions',
-		sendVoice: 'attachmentOptions',
-		sendRichLink: 'richLinkOptions',
-		sendGroup: 'groupOptions',
-		replyToMessage: 'replyOptions',
-		editMessage: 'editOptions',
-		reactToMessage: 'reactOptions',
-	};
-
-	const collection = legacyCollections[operation];
-	if (collection) {
-		const opts = ctx.getNodeParameter(collection, itemIndex, {}) as { fromPhone?: string };
-		if (opts.fromPhone) return opts.fromPhone;
-	}
-
-	const legacyFields: Record<string, string> = {
-		getMessage: 'lookupFromPhone',
-		sendCustom: 'customFromPhone',
-		createPoll: 'pollFromPhone',
-		shareContact: 'contactFromPhone',
-		setBackground: 'spaceFromPhone',
-		wrapWithTyping: 'spaceFromPhone',
-	};
-	const legacyField = legacyFields[operation];
-	if (legacyField) {
-		return (ctx.getNodeParameter(legacyField, itemIndex, '') as string) || '';
-	}
-
-	return '';
+function withLineMeta(result: IDataObject, space: ResolvedSpace): IDataObject {
+	const linePhone = space.phone && space.phone !== 'shared' ? space.phone : undefined;
+	return linePhone ? { ...result, linePhone } : result;
 }
 
 export class PhotonIMessage implements INodeType {
@@ -283,6 +259,24 @@ export class PhotonIMessage implements INodeType {
 				default: 'sendMessage',
 			},
 			{
+				displayName: 'Send From Line Name or ID',
+				name: 'sendFromLine',
+				type: 'options',
+				noDataExpression: false,
+				typeOptions: {
+					loadOptionsMethod: 'getProjectLines',
+				},
+				default: '={{ $json.linePhone || $credentials.primaryLineNumber }}',
+				description:
+					'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				displayOptions: {
+					show: {
+						'/credentials.photonSpectrumApi.lineMode': ['dedicated'],
+						operation: LINE_ROUTED_OPERATIONS,
+					},
+				},
+			},
+			{
 				displayName: 'Recipients',
 				name: 'recipients',
 				type: 'string',
@@ -290,7 +284,7 @@ export class PhotonIMessage implements INodeType {
 				default: '',
 				placeholder: '+15551234567',
 				description:
-					'Phone (+15551234567) or email. When wired after On iMessage Event, map the Sender field from input data.',
+					'Phone number in E.164 format (+15551234567). Apple ID emails are not supported.',
 				displayOptions: { show: { operation: RECIPIENT_OPERATIONS } },
 			},
 			{
@@ -425,7 +419,7 @@ export class PhotonIMessage implements INodeType {
 			},
 			{
 				displayName:
-					'Pre-filled from the Trigger when this node is wired right after <b>On iMessage Event</b>.',
+					'Map <b>Conversation With</b> to {{ $json.sender }} and <b>Send From Line</b> to {{ $json.linePhone }} when wired after On iMessage Event.',
 				name: 'replyNotice',
 				type: 'notice',
 				default: '',
@@ -438,7 +432,8 @@ export class PhotonIMessage implements INodeType {
 				required: true,
 				default: '={{ $json.sender }}',
 				placeholder: '={{ $json.sender }}',
-				description: 'Phone or email of whoever sent the inbound message',
+				description:
+					'Phone number of whoever sent the inbound message. Auto-filled from the trigger when wired after On iMessage Event.',
 				displayOptions: { show: { operation: TARGET_OPERATIONS } },
 			},
 			{
@@ -701,37 +696,15 @@ export class PhotonIMessage implements INodeType {
 					show: { operation: ['shareContact'], contactSource: ['structured'] },
 				},
 			},
-			{
-				displayName: 'Send From Phone',
-				name: 'fromPhone',
-				type: 'string',
-				default: '',
-				placeholder: '+15559999999',
-				description:
-					'Dedicated-line accounts only — pin the conversation to a specific line. Ignored on shared-pool plans.',
-				displayOptions: {
-					show: {
-						showExpertOptions: [true],
-						operation: [
-							'sendMessage',
-							'sendAttachment',
-							'sendVoice',
-							'sendRichLink',
-							'sendGroup',
-							'sendCustom',
-							'getMessage',
-							'replyToMessage',
-							'editMessage',
-							'reactToMessage',
-							'wrapWithTyping',
-							'createPoll',
-							'shareContact',
-							'setBackground',
-						],
-					},
-				},
-			},
 		],
+	};
+
+	methods = {
+		loadOptions: {
+			async getProjectLines(this: ILoadOptionsFunctions) {
+				return getProjectLineOptions(this);
+			},
+		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -780,7 +753,7 @@ async function runOne(
 	if (operation === 'sendMessage') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
 		const text = ctx.getNodeParameter('text', i) as string;
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 
 		let effectValue: ReturnType<typeof resolveEffect> | undefined;
@@ -803,18 +776,20 @@ async function runOne(
 		if (effectValue) content = effectBuilder(content, effectValue);
 
 		const result = await space.send(content as Parameters<typeof space.send>[0]);
-		return {
-			spaceId: space.id,
-			messageId: (result as { id?: string } | undefined)?.id,
-			phone: space.phone,
-			type: space.type,
-		};
+		return withLineMeta(
+			{
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				type: space.type,
+			},
+			space,
+		);
 	}
 
 	if (operation === 'sendAttachment' || operation === 'sendVoice') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
 		const source = ctx.getNodeParameter('attachmentSource', i) as 'path' | 'binary';
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const builder = operation === 'sendVoice' ? sp.voice : sp.attachment;
 
@@ -856,16 +831,16 @@ async function runOne(
 		}
 
 		const result = await space.send(content as Parameters<typeof space.send>[0]);
-		return { spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id };
+		return withLineMeta({ spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id }, space);
 	}
 
 	if (operation === 'sendRichLink') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
 		const url = ctx.getNodeParameter('url', i) as string;
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const result = await space.send(sp.richlink(url) as Parameters<typeof space.send>[0]);
-		return { spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id };
+		return withLineMeta({ spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id }, space);
 	}
 
 	if (operation === 'sendGroup') {
@@ -873,7 +848,7 @@ async function runOne(
 		const itemsRaw = ctx.getNodeParameter('groupItems', i) as {
 			items?: Array<{ kind: string; value: string }>;
 		};
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 
 		const builtItems: unknown[] = [];
@@ -898,18 +873,21 @@ async function runOne(
 		}
 		const groupContent = (sp.group as (...args: unknown[]) => unknown)(...builtItems);
 		const result = await space.send(groupContent as Parameters<typeof space.send>[0]);
-		return {
-			spaceId: space.id,
-			messageId: (result as { id?: string } | undefined)?.id,
-			itemCount: builtItems.length,
-		};
+		return withLineMeta(
+			{
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				itemCount: builtItems.length,
+			},
+			space,
+		);
 	}
 
 	if (operation === 'replyToMessage') {
 		const recipients = splitAddresses(ctx.getNodeParameter('targetRecipients', i) as string);
 		const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
 		const replyText = ctx.getNodeParameter('replyText', i, '') as string;
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const target = (await space.getMessage(targetId)) as Parameters<typeof sp.reply>[1];
 
@@ -962,18 +940,18 @@ async function runOne(
 		const ids = Array.isArray(result)
 			? (result as Array<{ id?: string }>).map((r) => r?.id).filter(Boolean)
 			: [(result as { id?: string } | undefined)?.id].filter(Boolean);
-		return { spaceId: space.id, messageIds: ids, messageId: ids[0] };
+		return withLineMeta({ spaceId: space.id, messageIds: ids, messageId: ids[0] }, space);
 	}
 
 	if (operation === 'editMessage') {
 		const recipients = splitAddresses(ctx.getNodeParameter('targetRecipients', i) as string);
 		const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
 		const newText = ctx.getNodeParameter('editText', i) as string;
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const target = (await space.getMessage(targetId)) as Parameters<typeof sp.edit>[1];
 		await space.send(sp.edit(sp.text(newText), target) as Parameters<typeof space.send>[0]);
-		return { spaceId: space.id, editedId: targetId };
+		return withLineMeta({ spaceId: space.id, editedId: targetId }, space);
 	}
 
 	if (operation === 'reactToMessage') {
@@ -987,16 +965,16 @@ async function runOne(
 		if (!reaction) {
 			throw new NodeOperationError(ctx.getNode(), 'Reaction is required', { itemIndex: i });
 		}
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const target = await space.getMessage(targetId);
 		await target.react(reaction);
-		return { spaceId: space.id, targetId, reaction };
+		return withLineMeta({ spaceId: space.id, targetId, reaction }, space);
 	}
 
 	if (operation === 'getMessage') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const messageId = ctx.getNodeParameter('lookupMessageId', i) as string;
 		const space = await resolveSpace(im, recipients, fromPhone);
 		let msg: (Awaited<ReturnType<typeof space.getMessage>> & {
@@ -1029,21 +1007,24 @@ async function runOne(
 				{ itemIndex: i },
 			);
 		}
-		return {
-			spaceId: space.id,
-			messageId: msg.id,
-			platform: msg.platform,
-			direction: msg.direction,
-			timestamp: msg.timestamp,
-			contentType: msg.content?.type,
-			text: msg.content?.text,
-			senderId: msg.sender?.id,
-		};
+		return withLineMeta(
+			{
+				spaceId: space.id,
+				messageId: msg.id,
+				platform: msg.platform,
+				direction: msg.direction,
+				timestamp: msg.timestamp,
+				contentType: msg.content?.type,
+				text: msg.content?.text,
+				senderId: msg.sender?.id,
+			},
+			space,
+		);
 	}
 
 	if (operation === 'sendCustom') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const payloadRaw = ctx.getNodeParameter('customPayload', i) as unknown;
 		let payload: unknown = payloadRaw;
 		if (typeof payloadRaw === 'string') {
@@ -1060,12 +1041,12 @@ async function runOne(
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const customBuilder = sp.custom as (raw: unknown) => unknown;
 		const result = await space.send(customBuilder(payload) as Parameters<typeof space.send>[0]);
-		return { spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id };
+		return withLineMeta({ spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id }, space);
 	}
 
 	if (operation === 'wrapWithTyping') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const wrapText = ctx.getNodeParameter('wrapText', i) as string;
 		const delayMs = ctx.getNodeParameter('wrapDelay', i, 1500) as number;
 		const space = await resolveSpace(im, recipients, fromPhone);
@@ -1073,26 +1054,29 @@ async function runOne(
 			if (delayMs > 0) await sleep(delayMs);
 			return space.send(sp.text(wrapText) as Parameters<typeof space.send>[0]);
 		});
-		return {
-			spaceId: space.id,
-			messageId: (result as { id?: string } | undefined)?.id,
-			typingMs: delayMs,
-		};
+		return withLineMeta(
+			{
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				typingMs: delayMs,
+			},
+			space,
+		);
 	}
 
 	if (operation === 'setBackground') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const source = ctx.getNodeParameter('backgroundSource', i) as 'path' | 'binary' | 'clear';
 		if (source === 'clear') {
 			await space.send(backgroundBuilder('clear') as Parameters<typeof space.send>[0]);
-			return { spaceId: space.id, background: 'clear' };
+			return withLineMeta({ spaceId: space.id, background: 'clear' }, space);
 		}
 		if (source === 'path') {
 			const path = ctx.getNodeParameter('backgroundPath', i) as string;
 			await space.send(backgroundBuilder(path) as Parameters<typeof space.send>[0]);
-			return { spaceId: space.id, background: 'set', source: path };
+			return withLineMeta({ spaceId: space.id, background: 'set', source: path }, space);
 		}
 		const property = ctx.getNodeParameter('backgroundBinary', i) as string;
 		const mime = ctx.getNodeParameter('backgroundMime', i) as string;
@@ -1103,7 +1087,7 @@ async function runOne(
 				typeof space.send
 			>[0],
 		);
-		return { spaceId: space.id, background: 'set', source: 'binary' };
+		return withLineMeta({ spaceId: space.id, background: 'set', source: 'binary' }, space);
 	}
 
 	if (operation === 'createPoll') {
@@ -1112,7 +1096,7 @@ async function runOne(
 		const opts = ctx.getNodeParameter('pollOptions', i) as {
 			values?: Array<{ option: string }>;
 		};
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 		const options = (opts.values ?? [])
 			.map((v) => (v.option ?? '').trim())
@@ -1127,18 +1111,21 @@ async function runOne(
 				typeof space.send
 			>[0],
 		);
-		return {
-			spaceId: space.id,
-			messageId: (result as { id?: string } | undefined)?.id,
-			title,
-			options,
-		};
+		return withLineMeta(
+			{
+				spaceId: space.id,
+				messageId: (result as { id?: string } | undefined)?.id,
+				title,
+				options,
+			},
+			space,
+		);
 	}
 
 	if (operation === 'shareContact') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
 		const source = ctx.getNodeParameter('contactSource', i) as 'structured' | 'vcard';
-		const fromPhone = getFromPhone(ctx, i, operation);
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
 		const space = await resolveSpace(im, recipients, fromPhone);
 
 		let contactContent: unknown;
@@ -1167,7 +1154,7 @@ async function runOne(
 			contactContent = (sp.contact as (input: unknown) => unknown)(input);
 		}
 		const result = await space.send(contactContent as Parameters<typeof space.send>[0]);
-		return { spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id };
+		return withLineMeta({ spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id }, space);
 	}
 
 	throw new NodeOperationError(ctx.getNode(), `Unsupported action: ${operation}`, {
@@ -1198,6 +1185,7 @@ async function resolveSpace(
 	if (recipients.length === 0) {
 		throw new ApplicationError('At least one recipient is required');
 	}
+	assertPhoneRecipients(recipients);
 	const users = await Promise.all(recipients.map((r) => im.user(r)));
 	const args: unknown[] = [...users];
 	if (fromPhone) args.push({ phone: fromPhone });

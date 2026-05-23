@@ -140,6 +140,8 @@ export class PhotonSpectrumApi implements ICredentialType {
 		},
 		{ displayName: 'Line mode key', name: 'lineMode', type: 'hidden', default: '' },
 		{ displayName: 'Line mode label', name: 'lineModeLabel', type: 'hidden', default: '' },
+		{ displayName: 'Line numbers JSON', name: 'lineNumbersJson', type: 'hidden', default: '[]' },
+		{ displayName: 'Line count', name: 'lineCount', type: 'hidden', default: 0 },
 		{ displayName: 'Spectrum Runtime URL', name: 'apiHost', type: 'hidden', default: DEFAULT_RUNTIME },
 		{ displayName: 'Dashboard URL', name: 'dashboardHost', type: 'hidden', default: DEFAULT_DASHBOARD },
 	];
@@ -209,6 +211,8 @@ async function runPreAuthentication(
 				imessageLines: credentials.imessageLines,
 				primaryLineNumber: credentials.primaryLineNumber,
 				lineStatus: credentials.lineStatus,
+				lineNumbersJson: credentials.lineNumbersJson,
+				lineCount: credentials.lineCount,
 			},
 			'connected',
 		);
@@ -252,6 +256,8 @@ async function runPreAuthentication(
 		base.lineModeLabel = lines.lineModeLabel;
 		base.imessageLines = lines.imessageLines;
 		base.primaryLineNumber = lines.primaryLineNumber;
+		base.lineNumbersJson = lines.lineNumbersJson;
+		base.lineCount = lines.lineCount;
 		base.lineStatus = buildLineStatus(lines);
 	} catch (err) {
 		if (isAuthError(err)) {

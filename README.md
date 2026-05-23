@@ -27,13 +27,13 @@ Send iMessages from a workflow.
 
 Turn on **Show Expert Options** for rich links, voice notes, polls, effects, group albums, and more.
 
-**Quick start:** Manual Trigger → Send Message → phone number + text.
+**Quick start:** Manual Trigger → Send Message → phone number (+15551234567) + text. Apple ID emails are not supported — use a phone number.
 
 **Auto-reply:** On iMessage Event → Reply or React (sender and message ID come from the trigger).
 
 ### iMessage by Photon Trigger
 
-Runs when an inbound text message arrives. Output includes `messageId`, `sender`, `text`, `spaceId`, `spaceType`, and `timestamp`.
+Runs when an inbound text message arrives. Output includes `messageId`, `sender`, `text`, `linePhone`, `spaceId`, `spaceType`, and `timestamp`.
 
 Activate the workflow to register the webhook. For local development:
 

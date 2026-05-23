@@ -9,6 +9,8 @@ import type {
 import { ApplicationError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 import { getSpectrumCredentials } from './lib/credentials';
+import { appleIdEmailErrorMessage, looksLikeEmailAddress } from './lib/recipients';
+import { parseWebhookLinePhone, parseWebhookSpaceType } from './lib/lines';
 import { getSpectrumHeader } from './lib/spectrumHeaders';
 import { assertPublicWebhookUrl, isLocalWebhookUrl } from './lib/webhookUrl';
 import {
@@ -84,7 +86,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		group: ['trigger'],
 		version: 1,
 		subtitle:
-			'={{ $credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential" }}',
+			'={{ $credentials.lineMode === "dedicated" && Number($credentials.lineCount) > 1 ? Number($credentials.lineCount) + " lines" : ($credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential") }}',
 		description: 'Runs when an inbound text iMessage arrives',
 		defaults: { name: 'On iMessage Event' },
 		inputs: [],
@@ -242,12 +244,12 @@ export class PhotonIMessageTrigger implements INodeType {
 
 		let payload: {
 			event?: string;
-			space?: { id?: string; platform?: string };
+			space?: { id?: string; platform?: string; phone?: string; type?: string };
 			message?: {
 				id?: string;
 				timestamp?: string;
 				sender?: { id?: string; platform?: string };
-				space?: { id?: string; platform?: string };
+				space?: { id?: string; platform?: string; phone?: string; type?: string };
 				content?: { type?: string; [key: string]: unknown };
 			};
 		};
@@ -273,6 +275,9 @@ export class PhotonIMessageTrigger implements INodeType {
 		}
 
 		const spaceId = payload.message.space?.id ?? payload.space?.id ?? '';
+		const linePhone = parseWebhookLinePhone(payload);
+		const spaceType = parseWebhookSpaceType(payload);
+
 		const content = payload.message.content ?? {};
 
 		let text: string;
@@ -285,13 +290,22 @@ export class PhotonIMessageTrigger implements INodeType {
 			);
 		}
 
+		const sender = payload.message.sender?.id ?? '';
+		if (sender && looksLikeEmailAddress(sender)) {
+			throw new NodeOperationError(
+				this.getNode(),
+				appleIdEmailErrorMessage([sender]),
+			);
+		}
+
 		const output: INodeExecutionData = {
 			json: {
 				messageId: payload.message.id ?? null,
-				sender: payload.message.sender?.id ?? null,
+				sender: sender || null,
 				text,
+				linePhone,
 				spaceId: spaceId || null,
-				spaceType: spaceId.includes(';-;') ? 'dm' : spaceId ? 'group' : null,
+				spaceType,
 				timestamp: payload.message.timestamp ?? null,
 			},
 		};
