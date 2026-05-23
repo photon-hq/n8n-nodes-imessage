@@ -40,12 +40,8 @@
 	},
 	"files": [
 		"dist",
-		"bin",
 		"npm-shrinkwrap.json"
 	],
-	"bin": {
-		"n8n-nodes-imessage": "bin/photon-imessage-login.cjs"
-	},
 	"n8n": {
 		"n8nNodesApiVersion": 1,
 		"strict": true,

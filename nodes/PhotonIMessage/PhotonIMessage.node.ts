@@ -58,7 +58,7 @@ const OPERATION_LABELS: Record<string, string> = {
 	setBackground: 'Set Chat Background',
 };
 
-const STANDARD_OPERATIONS = [
+const CORE_OPERATIONS = [
 	{
 		name: 'Send Message',
 		value: 'sendMessage',
@@ -72,43 +72,22 @@ const STANDARD_OPERATIONS = [
 	{
 		name: 'Reply to Message',
 		value: 'replyToMessage',
-		description: 'Reply to an inbound message — wire after On iMessage Event',
+		description: 'Reply to an inbound text message — wire after On iMessage Event',
 	},
 	{
 		name: 'React to Message',
 		value: 'reactToMessage',
 		description: 'Send a tapback — wire after On iMessage Event',
 	},
-	{
-		name: 'Send Rich Link',
-		value: 'sendRichLink',
-		description: 'Send a URL rendered as a rich link card',
-	},
-	{
-		name: 'Send Voice Note',
-		value: 'sendVoice',
-		description: 'Send an audio clip as an iMessage voice note',
-	},
-	{
-		name: 'Send With Typing',
-		value: 'wrapWithTyping',
-		description: 'Show typing indicator, wait, then send text',
-	},
-	{
-		name: 'Edit Message',
-		value: 'editMessage',
-		description: 'Edit the text of a message you previously sent',
-	},
-	{
-		name: 'Create Poll',
-		value: 'createPoll',
-		description: 'Create a poll in a conversation',
-	},
-	{
-		name: 'Share Contact Card',
-		value: 'shareContact',
-		description: 'Share a contact card with someone',
-	},
+];
+
+const MORE_OPERATIONS = [
+	{ name: 'Send Rich Link', value: 'sendRichLink', description: 'Send a URL as a rich link card' },
+	{ name: 'Send Voice Note', value: 'sendVoice', description: 'Send an audio clip as a voice note' },
+	{ name: 'Send With Typing', value: 'wrapWithTyping', description: 'Show typing indicator, wait, then send text' },
+	{ name: 'Edit Message', value: 'editMessage', description: 'Edit the text of a message you previously sent' },
+	{ name: 'Create Poll', value: 'createPoll', description: 'Send a poll in a conversation' },
+	{ name: 'Share Contact Card', value: 'shareContact', description: 'Share a contact card' },
 ];
 
 const PRIMARY_PICKER_ACTIONS: Record<string, string> = {
@@ -118,9 +97,9 @@ const PRIMARY_PICKER_ACTIONS: Record<string, string> = {
 	reactToMessage: 'React to a message',
 };
 
-const STANDARD_OPERATIONS_PICKER = STANDARD_OPERATIONS.map((op) => ({
+const CORE_OPERATIONS_PICKER = CORE_OPERATIONS.map((op) => ({
 	...op,
-	...(PRIMARY_PICKER_ACTIONS[op.value] ? { action: PRIMARY_PICKER_ACTIONS[op.value] } : {}),
+	action: PRIMARY_PICKER_ACTIONS[op.value],
 }));
 
 const EXPERT_OPERATIONS = [
@@ -256,7 +235,7 @@ export class PhotonIMessage implements INodeType {
 		group: ['output'],
 		version: 2,
 		subtitle: `={{ (${JSON.stringify(OPERATION_LABELS)})[$parameter.operation] || $parameter.operation || 'Send Message' }}`,
-		description: 'Send and automate iMessages — text, attachments, replies, reactions, and more',
+		description: 'Send and automate iMessages via Spectrum',
 		defaults: { name: 'iMessage by Photon' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
@@ -270,10 +249,18 @@ export class PhotonIMessage implements INodeType {
 		properties: [
 			{
 				displayName:
-					'<b>Outbound:</b> Manual Trigger → <b>Send Message</b>. <b>Auto-reply:</b> On iMessage Event → <b>Reply</b> or <b>React</b> (fields auto-fill).',
+					'Manual Trigger → <b>Send Message</b> to text someone. <b>On iMessage Event</b> → <b>Reply</b> or <b>React</b> to respond automatically.',
 				name: 'workflowNotice',
 				type: 'notice',
 				default: '',
+			},
+			{
+				displayName: 'Show Expert Options',
+				name: 'showExpertOptions',
+				type: 'boolean',
+				default: false,
+				description:
+					'Whether to show rich links, voice notes, polls, effects, group albums, and other advanced actions',
 			},
 			{
 				displayName: 'Action',
@@ -281,7 +268,7 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				displayOptions: { show: { showExpertOptions: [false] } },
-				options: STANDARD_OPERATIONS_PICKER,
+				options: CORE_OPERATIONS_PICKER,
 				default: 'sendMessage',
 			},
 			{
@@ -290,16 +277,10 @@ export class PhotonIMessage implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				displayOptions: { show: { showExpertOptions: [true] } },
-				options: [...STANDARD_OPERATIONS, ...EXPERT_OPERATIONS],
+				// eslint-disable n8n-nodes-base/node-param-operation-option-without-action
+				options: [...CORE_OPERATIONS, ...MORE_OPERATIONS, ...EXPERT_OPERATIONS],
+				// eslint-enable n8n-nodes-base/node-param-operation-option-without-action
 				default: 'sendMessage',
-			},
-			{
-				displayName: 'Show Expert Options',
-				name: 'showExpertOptions',
-				type: 'boolean',
-				default: false,
-				description:
-					'Whether to show custom payloads, message lookup, group albums, chat backgrounds, message effects, and dedicated-line options',
 			},
 			{
 				displayName: 'Recipients',

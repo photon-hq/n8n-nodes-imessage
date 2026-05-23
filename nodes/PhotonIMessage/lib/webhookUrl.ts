@@ -41,17 +41,16 @@ export function isLocalWebhookUrl(webhookUrl: string): boolean {
 }
 
 const PUBLIC_WEBHOOK_HELP =
-	'Self-hosted n8n on your machine cannot use localhost — Spectrum (cloud) must POST inbound iMessages to a public URL. ' +
-	'Options: (1) local dev — run <code>npm run dev:tunnel</code> in this repo (starts ngrok and sets WEBHOOK_URL), then toggle the workflow Active or Test this trigger; ' +
-	'(2) production — set environment variable <code>WEBHOOK_URL=https://your-public-domain</code> when starting n8n (or use ngrok: <code>ngrok http 5678</code> and set WEBHOOK_URL to the https URL). ' +
-	'<b>n8n Cloud</b> sets this automatically — no tunnel needed.';
+	'Use a public HTTPS URL so Spectrum can deliver webhooks. ' +
+	'Local dev: run <code>npm run dev:tunnel</code> in this repo, then activate the workflow. ' +
+	'Production: set <code>WEBHOOK_URL=https://your-domain</code> when starting n8n. ' +
+	'n8n Cloud sets this automatically.';
 
 export function assertPublicWebhookUrl(node: INode, webhookUrl: string): void {
 	if (!isLocalWebhookUrl(webhookUrl)) return;
 
 	throw new NodeApiError(node, {
-		message:
-			`Cannot register webhook for ${webhookUrl} — Spectrum cannot reach localhost or private network URLs.`,
+		message: `Webhook URL must be public (${webhookUrl}).`,
 		description: PUBLIC_WEBHOOK_HELP,
 	});
 }

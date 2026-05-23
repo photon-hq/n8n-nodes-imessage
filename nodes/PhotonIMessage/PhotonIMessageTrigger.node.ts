@@ -61,15 +61,11 @@ function parseTextContent(content: { type?: string; [key: string]: unknown }): s
 	}
 
 	if (type === 'attachment') {
-		throw new ApplicationError(
-			'Inbound attachments are not supported yet. Webhooks only include filename and MIME metadata — no file bytes or download URL.',
-		);
+		throw new ApplicationError('This trigger handles text messages only.');
 	}
 
 	if (type !== 'text') {
-		throw new ApplicationError(
-			`Unsupported content type "${type}". This trigger only handles inbound text messages.`,
-		);
+		throw new ApplicationError(`This trigger handles text messages only (got "${type}").`);
 	}
 
 	if (typeof content.text !== 'string') {
@@ -89,7 +85,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		version: 1,
 		subtitle:
 			'={{ $credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential" }}',
-		description: 'Triggers when an inbound text iMessage arrives',
+		description: 'Runs when an inbound text iMessage arrives',
 		defaults: { name: 'On iMessage Event' },
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
@@ -111,7 +107,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'Inbound <b>text only</b>. Attachments are not supported — webhooks do not include file bytes. Local dev: <code>npm run dev:tunnel</code>, then toggle <b>Active</b>.',
+					'Activate the workflow to start listening. Local dev: run <code>npm run dev:tunnel</code>.',
 				name: 'webhookModeNotice',
 				type: 'notice',
 				default: '',
@@ -268,7 +264,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		if (payload.event !== 'messages') {
 			throw new NodeOperationError(
 				this.getNode(),
-				`Unsupported webhook event "${payload.event}". This trigger only handles "messages".`,
+				`This trigger handles message events only (got "${payload.event}").`,
 			);
 		}
 
