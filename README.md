@@ -144,29 +144,20 @@ WEBHOOK_URL=https://YOUR-SUBDOMAIN.ngrok-free.app n8n start
 
 After the tunnel or `WEBHOOK_URL` is in place, toggle the workflow **Active** (or **Test this trigger**). If you restart ngrok, toggle Active off/on so Spectrum gets the new URL.
 
-Spectrum webhooks deliver inbound **text** and **attachment** messages only. See the [webhook events spec](https://docs.photon.codes/webhooks/events).
+Spectrum webhooks can deliver text and attachment metadata, but this trigger handles **inbound text only**. Attachments are rejected because webhooks do not include file bytes or a download URL. See the [webhook events spec](https://docs.photon.codes/webhooks/events).
 
-Output for `event: messages`:
+Output for each inbound text message:
 
 | Field | Type |
 |---|---|
-| `event` | `"messages"` |
-| `messageId` | `string` — stable, dedup-safe |
-| `webhookId` | `string` — from `X-Spectrum-Webhook-Id` |
-| `platform` | `"iMessage"` |
-| `direction` | `"inbound"` |
-| `spaceId` | `string` |
-| `spaceType` | `"dm" \| "group" \| null` — inferred from the space ID shape |
-| `sender` | `string` (E.164 phone or email) |
-| `senderPlatform` | `string` |
+| `messageId` | `string` — use with Reply / React actions |
+| `sender` | `string` — phone or email; maps to Reply / React recipient fields |
+| `text` | `string` — message body |
+| `spaceId` | `string` — conversation ID |
+| `spaceType` | `"dm" \| "group" \| null` |
 | `timestamp` | ISO 8601 |
-| `contentType` | `"text"` or `"attachment"` |
-| `attachmentKind` | `"photo" \| "voice" \| "video" \| "document" \| "attachment-other"` when `contentType` is `attachment` |
-| `text` | Message body when `contentType` is `text` |
-| `attachment` | `{ kind, name, mimeType, size }` when `contentType` is `attachment` (metadata only — no file bytes) |
-| `raw` | Full Spectrum payload |
 
-Unsupported webhook events or message content types fail the trigger with an error instead of passing data through.
+Unsupported events, attachments, and other content types fail the trigger with an error.
 
 ## Deep links
 

@@ -20,16 +20,6 @@ import {
 import { verifySpectrumWebhook } from './lib/verifySignature';
 import { deleteWebhook, listWebhooks } from './lib/webhookApi';
 
-type AttachmentKind = 'photo' | 'voice' | 'video' | 'document' | 'attachment-other';
-
-function classifyAttachment(mime: string): AttachmentKind {
-	if (mime.startsWith('image/')) return 'photo';
-	if (mime.startsWith('audio/')) return 'voice';
-	if (mime.startsWith('video/')) return 'video';
-	if (mime.startsWith('application/')) return 'document';
-	return 'attachment-other';
-}
-
 function resolveSigningSecret(
 	stored: StoredWebhook,
 	webhookIdHeader: string | undefined,
@@ -64,55 +54,29 @@ function webhookFailureMessage(
 	}
 }
 
-function parseMessageContent(content: { type?: string; [key: string]: unknown }): {
-	contentType: 'text' | 'attachment';
-	attachmentKind: AttachmentKind | null;
-	text: string | null;
-	attachment: {
-		kind: AttachmentKind;
-		name: string | null;
-		mimeType: string | null;
-		size: number | null;
-	} | null;
-} {
+function parseTextContent(content: { type?: string; [key: string]: unknown }): string {
 	const type = content.type;
 	if (!type) {
 		throw new ApplicationError('Message is missing content.type');
 	}
 
-	if (type === 'text') {
-		if (typeof content.text !== 'string') {
-			throw new ApplicationError('Text message is missing content.text');
-		}
-		return {
-			contentType: 'text',
-			attachmentKind: null,
-			text: content.text,
-			attachment: null,
-		};
-	}
-
 	if (type === 'attachment') {
-		if (typeof content.mimeType !== 'string' || !content.mimeType) {
-			throw new ApplicationError('Attachment is missing content.mimeType');
-		}
-		const kind = classifyAttachment(content.mimeType);
-		return {
-			contentType: 'attachment',
-			attachmentKind: kind,
-			text: null,
-			attachment: {
-				kind,
-				name: typeof content.name === 'string' ? content.name : null,
-				mimeType: content.mimeType,
-				size: typeof content.size === 'number' ? content.size : null,
-			},
-		};
+		throw new ApplicationError(
+			'Inbound attachments are not supported yet. Webhooks only include filename and MIME metadata — no file bytes or download URL.',
+		);
 	}
 
-	throw new ApplicationError(
-		`Unsupported content type "${type}". Spectrum webhooks currently deliver text and attachment only — see https://docs.photon.codes/webhooks/events`,
-	);
+	if (type !== 'text') {
+		throw new ApplicationError(
+			`Unsupported content type "${type}". This trigger only handles inbound text messages.`,
+		);
+	}
+
+	if (typeof content.text !== 'string') {
+		throw new ApplicationError('Text message is missing content.text');
+	}
+
+	return content.text;
 }
 
 // eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
@@ -125,7 +89,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		version: 1,
 		subtitle:
 			'={{ $credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential" }}',
-		description: 'Triggers when an inbound iMessage arrives (text or attachment)',
+		description: 'Triggers when an inbound text iMessage arrives',
 		defaults: { name: 'On iMessage Event' },
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
@@ -147,7 +111,7 @@ export class PhotonIMessageTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'Delivers inbound <b>text</b> and <b>attachments</b> only (<a href="https://docs.photon.codes/webhooks/events" target="_blank">Spectrum webhook spec</a>). Local dev: <code>npm run dev:tunnel</code>, then toggle <b>Active</b>.',
+					'Inbound <b>text only</b>. Attachments are not supported — webhooks do not include file bytes. Local dev: <code>npm run dev:tunnel</code>, then toggle <b>Active</b>.',
 				name: 'webhookModeNotice',
 				type: 'notice',
 				default: '',
@@ -236,7 +200,6 @@ export class PhotonIMessageTrigger implements INodeType {
 		const headers = this.getHeaderData() as Record<string, string | string[] | undefined>;
 		const signature = getSpectrumHeader(headers, 'x-spectrum-signature');
 		const timestamp = getSpectrumHeader(headers, 'x-spectrum-timestamp');
-		const eventHeader = getSpectrumHeader(headers, 'x-spectrum-event');
 		const webhookIdHeader = getSpectrumHeader(headers, 'x-spectrum-webhook-id');
 
 		const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
@@ -286,8 +249,6 @@ export class PhotonIMessageTrigger implements INodeType {
 			space?: { id?: string; platform?: string };
 			message?: {
 				id?: string;
-				platform?: string;
-				direction?: string;
 				timestamp?: string;
 				sender?: { id?: string; platform?: string };
 				space?: { id?: string; platform?: string };
@@ -315,13 +276,12 @@ export class PhotonIMessageTrigger implements INodeType {
 			throw new NodeOperationError(this.getNode(), 'Webhook payload is missing the message field');
 		}
 
-		const senderAddress = payload.message.sender?.id ?? '';
 		const spaceId = payload.message.space?.id ?? payload.space?.id ?? '';
 		const content = payload.message.content ?? {};
 
-		let parsed: ReturnType<typeof parseMessageContent>;
+		let text: string;
 		try {
-			parsed = parseMessageContent(content);
+			text = parseTextContent(content);
 		} catch (err) {
 			throw new NodeOperationError(
 				this.getNode(),
@@ -331,22 +291,12 @@ export class PhotonIMessageTrigger implements INodeType {
 
 		const output: INodeExecutionData = {
 			json: {
-				event: payload.event,
-				webhookId: webhookIdHeader ?? null,
-				eventHeader: eventHeader ?? null,
 				messageId: payload.message.id ?? null,
-				platform: payload.message.platform ?? 'iMessage',
-				direction: payload.message.direction ?? 'inbound',
+				sender: payload.message.sender?.id ?? null,
+				text,
 				spaceId: spaceId || null,
 				spaceType: spaceId.includes(';-;') ? 'dm' : spaceId ? 'group' : null,
-				sender: senderAddress || null,
-				senderPlatform: payload.message.sender?.platform ?? null,
 				timestamp: payload.message.timestamp ?? null,
-				contentType: parsed.contentType,
-				attachmentKind: parsed.attachmentKind,
-				text: parsed.text,
-				attachment: parsed.attachment,
-				raw: payload,
 			},
 		};
 
