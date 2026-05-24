@@ -108,9 +108,8 @@ export class PhotonIMessageTrigger implements INodeType {
 		],
 		properties: [
 			{
-				displayName:
-					'Activate the workflow to start listening. Local dev: run <code>npm run dev:tunnel</code>.',
-				name: 'webhookModeNotice',
+				displayName: 'Triggers when someone sends a text iMessage to your line.',
+				name: 'triggerNotice',
 				type: 'notice',
 				default: '',
 			},

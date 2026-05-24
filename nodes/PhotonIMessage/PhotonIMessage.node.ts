@@ -224,13 +224,6 @@ export class PhotonIMessage implements INodeType {
 		],
 		properties: [
 			{
-				displayName:
-					'Manual Trigger → <b>Send Message</b> to text someone. <b>On iMessage Event</b> → <b>Reply</b> or <b>React</b> to respond automatically.',
-				name: 'workflowNotice',
-				type: 'notice',
-				default: '',
-			},
-			{
 				displayName: 'Show Expert Options',
 				name: 'showExpertOptions',
 				type: 'boolean',
@@ -416,14 +409,6 @@ export class PhotonIMessage implements INodeType {
 						],
 					},
 				],
-			},
-			{
-				displayName:
-					'Map <b>Conversation With</b> to {{ $json.sender }} and <b>Send From Line</b> to {{ $json.linePhone }} when wired after On iMessage Event.',
-				name: 'replyNotice',
-				type: 'notice',
-				default: '',
-				displayOptions: { show: { operation: ['replyToMessage', 'reactToMessage'] } },
 			},
 			{
 				displayName: 'Conversation With',
