@@ -50,7 +50,8 @@
 		],
 		"nodes": [
 			"dist/nodes/PhotonIMessage/PhotonIMessage.node.js",
-			"dist/nodes/PhotonIMessage/PhotonIMessageTrigger.node.js"
+			"dist/nodes/PhotonIMessage/PhotonIMessageTrigger.node.js",
+			"dist/nodes/PhotonIMessage/PhotonIMessageTyping.node.js"
 		]
 	},
 	"devDependencies": {

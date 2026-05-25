@@ -51,13 +51,9 @@ const OPERATION_LABELS: Record<string, string> = {
 	reactToMessage: 'React',
 	sendRichLink: 'Send Rich Link',
 	sendVoice: 'Send Voice Note',
-	wrapWithTyping: 'Send With Typing',
 	editMessage: 'Edit Message',
 	createPoll: 'Create Poll',
 	shareContact: 'Share Contact',
-	sendGroup: 'Send Group (Album)',
-	getMessage: 'Get Message',
-	sendCustom: 'Send Custom Payload',
 	setBackground: 'Set Chat Background',
 };
 
@@ -84,14 +80,20 @@ const CORE_OPERATIONS = [
 	},
 ];
 
-const MORE_OPERATIONS = [
+const EXTENDED_OPERATIONS = [
 	{ name: 'Send Rich Link', value: 'sendRichLink', description: 'Send a URL as a rich link card' },
 	{ name: 'Send Voice Note', value: 'sendVoice', description: 'Send an audio clip as a voice note' },
-	{ name: 'Send With Typing', value: 'wrapWithTyping', description: 'Show typing indicator, wait, then send text' },
 	{ name: 'Edit Message', value: 'editMessage', description: 'Edit the text of a message you previously sent' },
 	{ name: 'Create Poll', value: 'createPoll', description: 'Send a poll in a conversation' },
 	{ name: 'Share Contact Card', value: 'shareContact', description: 'Share a contact card' },
+	{
+		name: 'Set Chat Background',
+		value: 'setBackground',
+		description: 'Set or clear the chat background image',
+	},
 ];
+
+const STANDARD_OPERATIONS = [...CORE_OPERATIONS, ...EXTENDED_OPERATIONS];
 
 const PRIMARY_PICKER_ACTIONS: Record<string, string> = {
 	sendMessage: 'Send a message',
@@ -100,43 +102,16 @@ const PRIMARY_PICKER_ACTIONS: Record<string, string> = {
 	reactToMessage: 'React to a message',
 };
 
-const CORE_OPERATIONS_PICKER = CORE_OPERATIONS.map((op) => ({
+const STANDARD_OPERATIONS_PICKER = STANDARD_OPERATIONS.map((op) => ({
 	...op,
-	action: PRIMARY_PICKER_ACTIONS[op.value],
+	...(PRIMARY_PICKER_ACTIONS[op.value] ? { action: PRIMARY_PICKER_ACTIONS[op.value] } : {}),
 }));
-
-const EXPERT_OPERATIONS = [
-	{
-		name: 'Send Group (Album)',
-		value: 'sendGroup',
-		description: 'Bundle multiple attachments and/or text into one album',
-	},
-	{
-		name: 'Get Message',
-		value: 'getMessage',
-		description: 'Look up a message by ID in a conversation',
-	},
-	{
-		name: 'Send Custom Payload',
-		value: 'sendCustom',
-		description: 'Advanced — raw provider JSON',
-	},
-	{
-		name: 'Set Chat Background',
-		value: 'setBackground',
-		description: 'Set or clear the chat background image',
-	},
-];
 
 const RECIPIENT_OPERATIONS = [
 	'sendMessage',
 	'sendAttachment',
 	'sendVoice',
 	'sendRichLink',
-	'sendGroup',
-	'sendCustom',
-	'getMessage',
-	'wrapWithTyping',
 	'createPoll',
 	'shareContact',
 	'setBackground',
@@ -146,25 +121,13 @@ const TARGET_OPERATIONS = ['replyToMessage', 'editMessage', 'reactToMessage'];
 
 const ATTACHMENT_OPERATIONS = ['sendAttachment', 'sendVoice'];
 
-const LINE_ROUTED_OPERATIONS = [
-	...RECIPIENT_OPERATIONS,
-	...TARGET_OPERATIONS,
-	'wrapWithTyping',
-	'setBackground',
-];
+const LINE_ROUTED_OPERATIONS = [...RECIPIENT_OPERATIONS, ...TARGET_OPERATIONS];
 
 function splitAddresses(raw: string): string[] {
 	return raw
 		.split(',')
 		.map((s) => s.trim())
 		.filter(Boolean);
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise<void>((resolve) => {
-		// eslint-disable-next-line @n8n/community-nodes/no-restricted-globals
-		setTimeout(resolve, ms);
-	});
 }
 
 function resolveOperation(ctx: IExecuteFunctions, itemIndex: number): string {
@@ -182,7 +145,7 @@ function resolveOperation(ctx: IExecuteFunctions, itemIndex: number): string {
 	if (resource === 'poll') return 'createPoll';
 	if (resource === 'contact') return 'shareContact';
 	if (resource === 'space') {
-		if (legacyOp === 'wrapWithTyping' || legacyOp === 'setBackground') return legacyOp;
+		if (legacyOp === 'setBackground') return legacyOp;
 	}
 	return legacyOp;
 }
@@ -229,25 +192,15 @@ export class PhotonIMessage implements INodeType {
 				type: 'boolean',
 				default: false,
 				description:
-					'Whether to show rich links, voice notes, polls, effects, group albums, and other advanced actions',
+					'Whether to show message effects and optional reply attachments',
 			},
 			{
 				displayName: 'Action',
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
-				displayOptions: { show: { showExpertOptions: [false] } },
-				options: CORE_OPERATIONS_PICKER,
-				default: 'sendMessage',
-			},
-			{
-				displayName: 'Action',
-				name: 'operation',
-				type: 'options',
-				noDataExpression: true,
-				displayOptions: { show: { showExpertOptions: [true] } },
 				// eslint-disable n8n-nodes-base/node-param-operation-option-without-action
-				options: [...CORE_OPERATIONS, ...MORE_OPERATIONS, ...EXPERT_OPERATIONS],
+				options: STANDARD_OPERATIONS_PICKER,
 				// eslint-enable n8n-nodes-base/node-param-operation-option-without-action
 				default: 'sendMessage',
 			},
@@ -374,43 +327,6 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: { show: { operation: ['sendRichLink'] } },
 			},
 			{
-				displayName: 'Items',
-				name: 'groupItems',
-				type: 'fixedCollection',
-				typeOptions: { multipleValues: true, sortable: true },
-				required: true,
-				default: { items: [] },
-				placeholder: 'Add Item',
-				displayOptions: { show: { operation: ['sendGroup'] } },
-				options: [
-					{
-						displayName: 'Item',
-						name: 'items',
-						values: [
-							{
-								displayName: 'Kind',
-								name: 'kind',
-								type: 'options',
-								options: [
-									{ name: 'Attachment (Path)', value: 'attachmentPath' },
-									{ name: 'Attachment (Binary)', value: 'attachmentBinary' },
-									{ name: 'Text', value: 'text' },
-								],
-								default: 'attachmentPath',
-							},
-							{
-								displayName: 'Value',
-								name: 'value',
-								type: 'string',
-								default: '',
-								description:
-									'For Attachment (Path): the file path. For Attachment (Binary): the binary property name. For Text: the text to send.',
-							},
-						],
-					},
-				],
-			},
-			{
 				displayName: 'Conversation With',
 				name: 'targetRecipients',
 				type: 'string',
@@ -493,44 +409,6 @@ export class PhotonIMessage implements INodeType {
 				displayOptions: {
 					show: { operation: ['reactToMessage'], reaction: ['__custom__'] },
 				},
-			},
-			{
-				displayName: 'Message ID',
-				name: 'lookupMessageId',
-				type: 'string',
-				required: true,
-				default: '',
-				placeholder: 'spc-msg-…',
-				description: 'The Spectrum message ID to look up in the resolved conversation',
-				displayOptions: { show: { operation: ['getMessage'] } },
-			},
-			{
-				displayName: 'Custom Payload (JSON)',
-				name: 'customPayload',
-				type: 'json',
-				required: true,
-				default: '{}',
-				description:
-					'Raw provider-specific payload forwarded through Spectrum\'s custom() builder. Only use when you know the expected shape.',
-				displayOptions: { show: { operation: ['sendCustom'] } },
-			},
-			{
-				displayName: 'Text',
-				name: 'wrapText',
-				type: 'string',
-				typeOptions: { rows: 3 },
-				required: true,
-				default: '',
-				description: 'Text to send after the typing indicator has been shown',
-				displayOptions: { show: { operation: ['wrapWithTyping'] } },
-			},
-			{
-				displayName: 'Typing Delay (Ms)',
-				name: 'wrapDelay',
-				type: 'number',
-				default: 1500,
-				description: 'How long to show the typing indicator before sending',
-				displayOptions: { show: { operation: ['wrapWithTyping'] } },
 			},
 			{
 				displayName: 'Background Source',
@@ -828,46 +706,6 @@ async function runOne(
 		return withLineMeta({ spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id }, space);
 	}
 
-	if (operation === 'sendGroup') {
-		const recipients = splitAddresses(getRecipients(ctx, i));
-		const itemsRaw = ctx.getNodeParameter('groupItems', i) as {
-			items?: Array<{ kind: string; value: string }>;
-		};
-		const fromPhone = await resolveLinePhone(ctx, i, operation);
-		const space = await resolveSpace(im, recipients, fromPhone);
-
-		const builtItems: unknown[] = [];
-		for (const entry of itemsRaw.items ?? []) {
-			if (entry.kind === 'text') builtItems.push(sp.text(entry.value));
-			else if (entry.kind === 'attachmentPath') builtItems.push(sp.attachment(entry.value));
-			else if (entry.kind === 'attachmentBinary') {
-				const binary = await ctx.helpers.getBinaryDataBuffer(i, entry.value);
-				const binaryMeta = ctx.helpers.assertBinaryData(i, entry.value);
-				builtItems.push(
-					sp.attachment(binary, {
-						name: binaryMeta.fileName || 'file',
-						mimeType: binaryMeta.mimeType,
-					}),
-				);
-			}
-		}
-		if (builtItems.length === 0) {
-			throw new NodeOperationError(ctx.getNode(), 'Group requires at least one item', {
-				itemIndex: i,
-			});
-		}
-		const groupContent = (sp.group as (...args: unknown[]) => unknown)(...builtItems);
-		const result = await space.send(groupContent as Parameters<typeof space.send>[0]);
-		return withLineMeta(
-			{
-				spaceId: space.id,
-				messageId: (result as { id?: string } | undefined)?.id,
-				itemCount: builtItems.length,
-			},
-			space,
-		);
-	}
-
 	if (operation === 'replyToMessage') {
 		const recipients = splitAddresses(ctx.getNodeParameter('targetRecipients', i) as string);
 		const targetId = ctx.getNodeParameter('targetMessageId', i) as string;
@@ -955,98 +793,6 @@ async function runOne(
 		const target = await space.getMessage(targetId);
 		await target.react(reaction);
 		return withLineMeta({ spaceId: space.id, targetId, reaction }, space);
-	}
-
-	if (operation === 'getMessage') {
-		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = await resolveLinePhone(ctx, i, operation);
-		const messageId = ctx.getNodeParameter('lookupMessageId', i) as string;
-		const space = await resolveSpace(im, recipients, fromPhone);
-		let msg: (Awaited<ReturnType<typeof space.getMessage>> & {
-			id: string;
-			platform?: string;
-			timestamp?: Date;
-			direction?: string;
-			content?: { type?: string; text?: string };
-			sender?: { id: string };
-		}) | undefined;
-		try {
-			msg = (await space.getMessage(messageId)) as typeof msg;
-		} catch (err) {
-			const status =
-				(err as { httpCode?: number; statusCode?: number }).httpCode ??
-				(err as { statusCode?: number }).statusCode;
-			if (status === 404) {
-				throw new NodeOperationError(
-					ctx.getNode(),
-					`Message ${messageId} not found in this conversation`,
-					{ itemIndex: i },
-				);
-			}
-			throw new NodeApiError(ctx.getNode(), err as JsonObject, { itemIndex: i });
-		}
-		if (!msg) {
-			throw new NodeOperationError(
-				ctx.getNode(),
-				`Message ${messageId} not found in this conversation`,
-				{ itemIndex: i },
-			);
-		}
-		return withLineMeta(
-			{
-				spaceId: space.id,
-				messageId: msg.id,
-				platform: msg.platform,
-				direction: msg.direction,
-				timestamp: msg.timestamp,
-				contentType: msg.content?.type,
-				text: msg.content?.text,
-				senderId: msg.sender?.id,
-			},
-			space,
-		);
-	}
-
-	if (operation === 'sendCustom') {
-		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = await resolveLinePhone(ctx, i, operation);
-		const payloadRaw = ctx.getNodeParameter('customPayload', i) as unknown;
-		let payload: unknown = payloadRaw;
-		if (typeof payloadRaw === 'string') {
-			try {
-				payload = JSON.parse(payloadRaw);
-			} catch (parseError) {
-				throw new NodeOperationError(
-					ctx.getNode(),
-					`Custom payload is not valid JSON: ${(parseError as Error).message}`,
-					{ itemIndex: i },
-				);
-			}
-		}
-		const space = await resolveSpace(im, recipients, fromPhone);
-		const customBuilder = sp.custom as (raw: unknown) => unknown;
-		const result = await space.send(customBuilder(payload) as Parameters<typeof space.send>[0]);
-		return withLineMeta({ spaceId: space.id, messageId: (result as { id?: string } | undefined)?.id }, space);
-	}
-
-	if (operation === 'wrapWithTyping') {
-		const recipients = splitAddresses(getRecipients(ctx, i));
-		const fromPhone = await resolveLinePhone(ctx, i, operation);
-		const wrapText = ctx.getNodeParameter('wrapText', i) as string;
-		const delayMs = ctx.getNodeParameter('wrapDelay', i, 1500) as number;
-		const space = await resolveSpace(im, recipients, fromPhone);
-		const result = await space.responding(async () => {
-			if (delayMs > 0) await sleep(delayMs);
-			return space.send(sp.text(wrapText) as Parameters<typeof space.send>[0]);
-		});
-		return withLineMeta(
-			{
-				spaceId: space.id,
-				messageId: (result as { id?: string } | undefined)?.id,
-				typingMs: delayMs,
-			},
-			space,
-		);
 	}
 
 	if (operation === 'setBackground') {

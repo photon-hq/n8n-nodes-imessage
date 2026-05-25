@@ -82,7 +82,6 @@ function legacyFromPhone(ctx: IExecuteFunctions, itemIndex: number, operation: s
 		sendAttachment: 'attachmentOptions',
 		sendVoice: 'attachmentOptions',
 		sendRichLink: 'richLinkOptions',
-		sendGroup: 'groupOptions',
 		replyToMessage: 'replyOptions',
 		editMessage: 'editOptions',
 		reactToMessage: 'reactOptions',
@@ -95,12 +94,9 @@ function legacyFromPhone(ctx: IExecuteFunctions, itemIndex: number, operation: s
 	}
 
 	const legacyFields: Record<string, string> = {
-		getMessage: 'lookupFromPhone',
-		sendCustom: 'customFromPhone',
 		createPoll: 'pollFromPhone',
 		shareContact: 'contactFromPhone',
 		setBackground: 'spaceFromPhone',
-		wrapWithTyping: 'spaceFromPhone',
 	};
 	const legacyField = legacyFields[operation];
 	if (legacyField) {
