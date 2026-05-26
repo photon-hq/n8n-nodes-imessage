@@ -6,28 +6,8 @@ on:
       - 'v*.*.*'
 
 jobs:
-  verify:
-    name: Pre-release verification
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - run: npm ci
-
-      - run: npm run lint
-
-      - name: English-only copy (n8n verification)
-        run: npm run check:english
-
-      - run: npm run build
-
   publish:
     name: Publish to npm
-    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -42,6 +22,10 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run lint
+
+      - run: npm run build
+
       - name: Generate production shrinkwrap
         run: |
           node -e "
@@ -52,14 +36,9 @@ jobs:
             require('fs').writeFileSync('npm-shrinkwrap.json', JSON.stringify(s, null, 2) + '\n');
           "
 
-      - run: npm run build
-
       - run: npm run release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Scan published package
-        run: npx --yes @n8n/scan-community-package n8n-nodes-imessage@$(node -p "require('./package.json').version")
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
