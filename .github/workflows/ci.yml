@@ -7,7 +7,8 @@ on:
       - main
 
 jobs:
-  build:
+  verify:
+    name: Lint, English copy, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,5 +20,8 @@ jobs:
       - run: npm ci
 
       - run: npm run lint
+
+      - name: English-only copy (n8n verification)
+        run: npm run check:english
 
       - run: npm run build
