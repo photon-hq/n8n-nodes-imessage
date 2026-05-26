@@ -20,23 +20,11 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Configure npm auth
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "NPM_TOKEN is not set. Add the photon-hq org secret to this repository."
-            exit 1
-          fi
-          npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - run: npm ci
 
-      - name: Publish with provenance
-        run: npm run release
+      - run: npm run release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
