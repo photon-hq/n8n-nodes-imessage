@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-imessage",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "n8n community node for iMessage by Photon — send, receive, and automate iMessage conversations built on Spectrum",
 	"license": "MIT",
 	"keywords": [
@@ -50,8 +50,7 @@
 		],
 		"nodes": [
 			"dist/nodes/PhotonIMessage/PhotonIMessage.node.js",
-			"dist/nodes/PhotonIMessage/PhotonIMessageTrigger.node.js",
-			"dist/nodes/PhotonIMessage/PhotonIMessageTyping.node.js"
+			"dist/nodes/PhotonIMessage/PhotonIMessageTrigger.node.js"
 		]
 	},
 	"devDependencies": {

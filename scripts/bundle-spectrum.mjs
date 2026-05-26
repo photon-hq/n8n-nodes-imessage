@@ -27,10 +27,6 @@ const entryPoints = [
 		src: join(root, 'nodes', 'PhotonIMessage', 'PhotonIMessageTrigger.node.ts'),
 		out: join(dist, 'nodes', 'PhotonIMessage', 'PhotonIMessageTrigger.node.js'),
 	},
-	{
-		src: join(root, 'nodes', 'PhotonIMessage', 'PhotonIMessageTyping.node.ts'),
-		out: join(dist, 'nodes', 'PhotonIMessage', 'PhotonIMessageTyping.node.js'),
-	},
 ];
 
 /**

@@ -27,7 +27,7 @@ In n8n, create a **Photon iMessage API** credential with your **Project ID** and
 
 Send iMessages from a workflow.
 
-**Default actions:** Send Message, Send Attachment, Reply, React.
+**Default actions:** Send Message, Send Attachment, Reply, React, Typing Indicator.
 
 Turn on **Show Expert Options** for rich links, voice notes, polls, effects, group albums, and more.
 

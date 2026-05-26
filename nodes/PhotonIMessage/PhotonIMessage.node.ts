@@ -55,6 +55,7 @@ const OPERATION_LABELS: Record<string, string> = {
 	createPoll: 'Create Poll',
 	shareContact: 'Share Contact',
 	setBackground: 'Set Chat Background',
+	typingIndicator: 'Typing Indicator',
 };
 
 const CORE_OPERATIONS = [
@@ -78,6 +79,11 @@ const CORE_OPERATIONS = [
 		value: 'reactToMessage',
 		description: 'Send a tapback — wire after On iMessage Event',
 	},
+	{
+		name: 'Typing Indicator',
+		value: 'typingIndicator',
+		description: 'Show or hide the typing indicator in a thread',
+	},
 ];
 
 const EXTENDED_OPERATIONS = [
@@ -100,6 +106,7 @@ const PRIMARY_PICKER_ACTIONS: Record<string, string> = {
 	sendAttachment: 'Send an attachment',
 	replyToMessage: 'Reply in thread',
 	reactToMessage: 'React to a message',
+	typingIndicator: 'Set typing indicator',
 };
 
 const STANDARD_OPERATIONS_PICKER = STANDARD_OPERATIONS.map((op) => ({
@@ -115,6 +122,9 @@ const RECIPIENT_OPERATIONS = [
 	'createPoll',
 	'shareContact',
 	'setBackground',
+	'typingIndicator',
+	'startTyping',
+	'stopTyping',
 ];
 
 const TARGET_OPERATIONS = ['replyToMessage', 'editMessage', 'reactToMessage'];
@@ -232,6 +242,17 @@ export class PhotonIMessage implements INodeType {
 				description:
 					'Phone number in E.164 format (+15551234567). Apple ID emails are not supported.',
 				displayOptions: { show: { operation: RECIPIENT_OPERATIONS } },
+			},
+			{
+				displayName: 'Typing Action',
+				name: 'typingAction',
+				type: 'options',
+				options: [
+					{ name: 'Start', value: 'start', description: 'Show the typing indicator' },
+					{ name: 'Stop', value: 'stop', description: 'Hide the typing indicator' },
+				],
+				default: 'start',
+				displayOptions: { show: { operation: ['typingIndicator'] } },
 			},
 			{
 				displayName: 'Message Text',
@@ -853,6 +874,34 @@ async function runOne(
 		);
 	}
 
+	if (operation === 'typingIndicator' || operation === 'startTyping' || operation === 'stopTyping') {
+		const recipients = splitAddresses(getRecipients(ctx, i));
+		const fromPhone = await resolveLinePhone(ctx, i, operation);
+		const space = await resolveSpace(im, recipients, fromPhone);
+
+		const typingAction =
+			operation === 'stopTyping'
+				? 'stop'
+				: operation === 'startTyping'
+					? 'start'
+					: (ctx.getNodeParameter('typingAction', i, 'start') as 'start' | 'stop');
+
+		if (typingAction === 'start') {
+			await space.startTyping();
+		} else {
+			await space.stopTyping();
+		}
+
+		return withLineMeta(
+			{
+				success: true,
+				spaceId: space.id,
+				typing: typingAction,
+			},
+			space,
+		);
+	}
+
 	if (operation === 'shareContact') {
 		const recipients = splitAddresses(getRecipients(ctx, i));
 		const source = ctx.getNodeParameter('contactSource', i) as 'structured' | 'vcard';
@@ -898,6 +947,8 @@ interface ResolvedSpace {
 	phone?: string;
 	type?: string;
 	send: (content: unknown) => Promise<{ id?: string } | undefined>;
+	startTyping: () => Promise<void>;
+	stopTyping: () => Promise<void>;
 	responding: <T>(fn: () => T | Promise<T>) => Promise<T>;
 	getMessage: (id: string) => Promise<{
 		id: string;
