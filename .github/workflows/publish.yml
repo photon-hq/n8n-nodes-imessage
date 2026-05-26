@@ -1,12 +1,12 @@
-# Publishes to npm when you push a version tag.
+# Publishes to npm when you push a version tag (v1.0.0, v1.0.1, …).
 #
-# Release locally:
+# To release:
 #   npm run release
 #
-# That bumps the version, commits, tags (v*.*.*), and pushes — which triggers this workflow.
-# n8n monitors npm for new versions after your node is verified; no sync workflow needed.
+# That bumps the version, commits, tags, and pushes — this workflow publishes to npm.
+# n8n monitors npm and propagates verified packages automatically.
 
-name: Release
+name: Publish
 
 on:
   push:
@@ -26,6 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
           cache: npm
 
       - run: npm ci
