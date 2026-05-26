@@ -1,10 +1,9 @@
 # Publishes to npm when you push a version tag (v1.0.0, v1.0.1, …).
 #
-# To release:
+# Release locally:
 #   npm run release
 #
-# That bumps the version, commits, tags, and pushes — this workflow publishes to npm.
-# n8n monitors npm and propagates verified packages automatically.
+# npm Trusted Publishing (if enabled on npmjs.com) must use workflow file: publish.yml
 
 name: Publish
 
@@ -28,12 +27,16 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - run: npm ci
 
       - name: Publish to npm
         run: |
-          [ -n "$NPM_TOKEN" ] && npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-          npm run release
+          npm run lint
+          npm run build
+          npm publish
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
