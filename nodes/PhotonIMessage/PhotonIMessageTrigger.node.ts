@@ -1,40 +1,83 @@
 import type {
-	IWebhookFunctions,
+	IHookFunctions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
+	IWebhookFunctions,
 	IWebhookResponseData,
-	IHookFunctions,
 } from 'n8n-workflow';
-import { NodeConnectionTypes } from 'n8n-workflow';
-import { createHmac } from 'crypto';
+import { ApplicationError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
-const PHOTON_EVENTS = [
-	{ name: 'All Events', value: '*', description: 'Trigger on every event type' },
-	{ name: 'New Message', value: 'new-message', description: 'Messages: A new message was received or sent' },
-	{ name: 'Updated Message', value: 'updated-message', description: 'Messages: A message was edited or a reaction was added' },
-	{ name: 'Message Send Error', value: 'message-send-error', description: 'Messages: A message failed to send' },
-	{ name: 'Chat Read Status Changed', value: 'chat-read-status-changed', description: 'Chat: A chat was marked as read or unread' },
-	{ name: 'Typing Indicator', value: 'typing-indicator', description: 'Chat: Someone started or stopped typing' },
-	{ name: 'Group Name Change', value: 'group-name-change', description: 'Group: A group chat was renamed' },
-	{ name: 'Participant Added', value: 'participant-added', description: 'Group: Someone was added to a group chat' },
-	{ name: 'Participant Removed', value: 'participant-removed', description: 'Group: Someone was removed from a group chat' },
-	{ name: 'Participant Left', value: 'participant-left', description: 'Group: Someone left a group chat' },
-	{ name: 'Group Icon Changed', value: 'group-icon-changed', description: 'Group: The group chat icon was updated' },
-	{ name: 'Group Icon Removed', value: 'group-icon-removed', description: 'Group: The group chat icon was removed' },
-	{ name: 'FaceTime Call Status Changed', value: 'ft-call-status-changed', description: 'Apple: A FaceTime call started, ended, or changed status' },
-	{ name: 'New FindMy Location', value: 'new-findmy-location', description: 'Apple: A new Find My location update was received' },
-	{ name: 'Scheduled Message Created', value: 'scheduled-message-created', description: 'Scheduled: A new message was scheduled' },
-	{ name: 'Scheduled Message Updated', value: 'scheduled-message-updated', description: 'Scheduled: A scheduled message was modified' },
-	{ name: 'Scheduled Message Deleted', value: 'scheduled-message-deleted', description: 'Scheduled: A scheduled message was cancelled' },
-	{ name: 'Scheduled Message Sent', value: 'scheduled-message-sent', description: 'Scheduled: A scheduled message was delivered' },
-	{ name: 'Scheduled Message Error', value: 'scheduled-message-error', description: 'Scheduled: A scheduled message failed to send' },
-	{ name: 'New Server', value: 'new-server', description: 'Server: A new Photon server came online' },
-	{ name: 'Server Update', value: 'server-update', description: 'Server: A server update is available' },
-	{ name: 'Server Update Downloading', value: 'server-update-downloading', description: 'Server: A server update is being downloaded' },
-	{ name: 'Server Update Installing', value: 'server-update-installing', description: 'Server: A server update is being installed' },
-];
+import { getSpectrumCredentials } from './lib/credentials';
+import { appleIdEmailErrorMessage, looksLikeEmailAddress } from './lib/recipients';
+import { parseWebhookLinePhone, parseWebhookSpaceType } from './lib/lines';
+import { getSpectrumHeader } from './lib/spectrumHeaders';
+import { assertPublicWebhookUrl, isLocalWebhookUrl } from './lib/webhookUrl';
+import {
+	hasStaleRemoteWebhooks,
+	isWebhookRegistered,
+	type StoredWebhook,
+	syncSpectrumWebhook,
+} from './lib/webhookSync';
+import { verifySpectrumWebhook } from './lib/verifySignature';
+import { deleteWebhook, listWebhooks } from './lib/webhookApi';
 
+function resolveSigningSecret(
+	stored: StoredWebhook,
+	webhookIdHeader: string | undefined,
+): string | undefined {
+	if (!webhookIdHeader || webhookIdHeader === stored.id) {
+		return stored.signingSecret;
+	}
+	return undefined;
+}
+
+function webhookFailureMessage(
+	reason:
+		| 'not-registered'
+		| 'missing-body'
+		| 'unknown-webhook-id'
+		| 'missing-headers'
+		| 'stale-timestamp'
+		| 'bad-signature',
+): string {
+	switch (reason) {
+		case 'not-registered':
+			return 'not listening — click Test this trigger or activate the workflow';
+		case 'missing-body':
+			return 'empty request body — check your reverse proxy is forwarding POST bodies';
+		case 'unknown-webhook-id':
+		case 'bad-signature':
+			return 'stale webhook — toggle Active off/on, or click Test this trigger again';
+		case 'missing-headers':
+			return 'missing Spectrum signature headers';
+		case 'stale-timestamp':
+			return 'webhook timestamp too old — check server clock or retry';
+	}
+}
+
+function parseTextContent(content: { type?: string; [key: string]: unknown }): string {
+	const type = content.type;
+	if (!type) {
+		throw new ApplicationError('Message is missing content.type');
+	}
+
+	if (type === 'attachment') {
+		throw new ApplicationError('This trigger handles text messages only.');
+	}
+
+	if (type !== 'text') {
+		throw new ApplicationError(`This trigger handles text messages only (got "${type}").`);
+	}
+
+	if (typeof content.text !== 'string') {
+		throw new ApplicationError('Text message is missing content.text');
+	}
+
+	return content.text;
+}
+
+// eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
 export class PhotonIMessageTrigger implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'iMessage by Photon Trigger',
@@ -42,11 +85,10 @@ export class PhotonIMessageTrigger implements INodeType {
 		icon: 'file:Dark.svg',
 		group: ['trigger'],
 		version: 1,
-		subtitle: '={{$parameter["events"].join(", ")}}',
-		description: 'Triggers on real-time iMessage events via the Photon Webhook service',
-		defaults: {
-			name: 'On iMessage Event',
-		},
+		subtitle:
+			'={{ $credentials.lineMode === "dedicated" && Number($credentials.lineCount) > 1 ? Number($credentials.lineCount) + " lines" : ($credentials.primaryLineNumber ? "Line " + $credentials.primaryLineNumber : "Set up credential") }}',
+		description: 'Runs when an inbound text iMessage arrives',
+		defaults: { name: 'On iMessage Event' },
 		inputs: [],
 		outputs: [NodeConnectionTypes.Main],
 		webhooks: [
@@ -55,160 +97,218 @@ export class PhotonIMessageTrigger implements INodeType {
 				httpMethod: 'POST',
 				responseMode: 'onReceived',
 				path: 'webhook',
+				rawBody: true,
 			},
 		],
 		credentials: [
 			{
-				name: 'photonIMessageApi',
+				name: 'photonSpectrumApi',
 				required: true,
 			},
 		],
 		properties: [
 			{
-				displayName:
-					'Configure webhook at <a href="https://webhook.photon.codes" target="_blank">webhook.photon.codes</a>. Use the Webhook URL shown below as the "Webhook URL" field.',
-				name: 'setupNotice',
+				displayName: 'Triggers when someone sends a text iMessage to your line.',
+				name: 'triggerNotice',
 				type: 'notice',
 				default: '',
 			},
-			{
-				displayName: 'Events',
-				name: 'events',
-				type: 'multiOptions',
-				options: PHOTON_EVENTS,
-				default: ['new-message'],
-				required: true,
-				description: 'Which iMessage events to listen for',
-			},
-			{
-				displayName: 'Signing Secret',
-				name: 'signingSecret',
-				type: 'string',
-				typeOptions: { password: true },
-				default: '',
-				description: 'The signing secret you received when configuring the webhook at webhook.photon.codes. Used to verify incoming requests.',
-			},
-			{
-				displayName: 'Options',
-				name: 'options',
-				type: 'collection',
-				placeholder: 'Add Option',
-				default: {},
-				options: [
-					{
-						displayName: 'Filter by Chat GUID',
-						name: 'chatGuid',
-						type: 'string',
-						default: '',
-						placeholder: 'iMessage;-;+1234567890',
-						description: 'Only trigger for events in this chat (leave blank for all)',
-					},
-					{
-						displayName: 'Ignore Own Messages',
-						name: 'ignoreOwn',
-						type: 'boolean',
-						default: true,
-						description: 'Whether to skip messages you sent (isFromMe = true)',
-					},
-				],
-			},
 		],
-		usableAsTool: true,
 	};
 
 	webhookMethods = {
 		default: {
 			async checkExists(this: IHookFunctions): Promise<boolean> {
+				const webhookUrl = this.getNodeWebhookUrl('default');
+				if (!webhookUrl || isLocalWebhookUrl(webhookUrl)) return false;
+
+				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
+				const stored = staticData.webhook as StoredWebhook | undefined;
+				const creds = await getSpectrumCredentials(this);
+				const remote = await listWebhooks(this, creds);
+				const nodeWebhookId = this.getNode().webhookId;
+
+				if (!isWebhookRegistered(remote, stored, webhookUrl)) return false;
+				if (hasStaleRemoteWebhooks(remote, stored, webhookUrl, nodeWebhookId)) return false;
 				return true;
 			},
+
 			async create(this: IHookFunctions): Promise<boolean> {
+				const webhookUrl = this.getNodeWebhookUrl('default');
+				if (!webhookUrl) return false;
+
+				assertPublicWebhookUrl(this.getNode(), webhookUrl);
+
+				const creds = await getSpectrumCredentials(this);
+				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
+				const stored = staticData.webhook as StoredWebhook | undefined;
+				const nodeWebhookId = this.getNode().webhookId;
+
+				const synced = await syncSpectrumWebhook(
+					this,
+					creds,
+					webhookUrl,
+					nodeWebhookId,
+					stored,
+				);
+
+				staticData.webhook = synced;
+				this.logger.info(
+					`[iMessage by Photon Trigger] Spectrum webhook ${synced.id} synced → ${webhookUrl}`,
+				);
 				return true;
 			},
+
 			async delete(this: IHookFunctions): Promise<boolean> {
+				const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
+				const stored = staticData.webhook as StoredWebhook | undefined;
+				if (!stored?.id) return true;
+
+				const creds = await getSpectrumCredentials(this);
+				await deleteWebhook(this, creds, stored.id);
+				delete staticData.webhook;
 				return true;
 			},
 		},
 	};
 
 	async webhook(this: IWebhookFunctions): Promise<IWebhookResponseData> {
-		const req = this.getRequestObject();
-		const body = req.body as { event?: string; data?: Record<string, unknown> };
-
-		const signingSecret = this.getNodeParameter('signingSecret', '') as string;
-
-		if (signingSecret) {
-			const signature = this.getHeaderData()['x-photon-signature'] as string | undefined;
-			const timestamp = this.getHeaderData()['x-photon-timestamp'] as string | undefined;
-
-			if (!signature || !timestamp) {
-				return { webhookResponse: 'Missing signature headers', noWebhookResponse: false };
-			}
-
-			const rawBody = typeof req.rawBody === 'string' ? req.rawBody : JSON.stringify(req.body);
-			const sigBase = `v0:${timestamp}:${rawBody}`;
-			const expected = `v0=${createHmac('sha256', signingSecret).update(sigBase).digest('hex')}`;
-
-			if (expected !== signature) {
-				return { webhookResponse: 'Invalid signature', noWebhookResponse: false };
-			}
-		}
-
-		if (!body.event) {
-			return { webhookResponse: 'Missing event field', noWebhookResponse: false };
-		}
-
-		const selectedEvents = this.getNodeParameter('events', []) as string[];
-		if (!selectedEvents.includes('*') && !selectedEvents.includes(body.event)) {
-			return { noWebhookResponse: true };
-		}
-
-		const options = this.getNodeParameter('options', {}) as {
-			chatGuid?: string;
-			ignoreOwn?: boolean;
+		const req = this.getRequestObject() as ReturnType<IWebhookFunctions['getRequestObject']> & {
+			rawBody?: Buffer | string;
+			readRawBody?: () => Promise<void>;
 		};
 
-		const data = body.data ?? {};
-
-		if (options.ignoreOwn !== false && data.isFromMe) {
-			return { noWebhookResponse: true };
-		}
-
-		if (options.chatGuid) {
-			const chats = data.chats as Array<Record<string, unknown>> | undefined;
-			const chatGuids = chats?.map((c) => c.guid as string) ?? [];
-			const cacheRoomnames = data.cacheRoomnames as string | undefined;
-
-			const parts = options.chatGuid.split(';');
-			const addr = parts.length === 3 ? parts[2] : options.chatGuid;
-
-			const matches = chatGuids.some((g) => g.includes(addr)) ||
-				(cacheRoomnames != null && cacheRoomnames.includes(addr));
-
-			if (!matches) {
-				return { noWebhookResponse: true };
+		if (!req.rawBody && typeof req.readRawBody === 'function') {
+			try {
+				await req.readRawBody();
+			} catch {
+				// no-op
 			}
 		}
 
-		const handle = data.handle as Record<string, unknown> | undefined;
-		const chats = data.chats as Array<Record<string, unknown>> | undefined;
-		const attachments = data.attachments as unknown[] | undefined;
+		const rawBodyBuf = req.rawBody;
+		const rawBody =
+			rawBodyBuf instanceof Buffer
+				? rawBodyBuf.toString('utf8')
+				: typeof rawBodyBuf === 'string'
+					? rawBodyBuf
+					: '';
+
+		const headers = this.getHeaderData() as Record<string, string | string[] | undefined>;
+		const signature = getSpectrumHeader(headers, 'x-spectrum-signature');
+		const timestamp = getSpectrumHeader(headers, 'x-spectrum-timestamp');
+		const webhookIdHeader = getSpectrumHeader(headers, 'x-spectrum-webhook-id');
+
+		const staticData = this.getWorkflowStaticData('node') as Record<string, unknown>;
+		const stored = staticData.webhook as StoredWebhook | undefined;
+
+		if (!stored?.signingSecret) {
+			return {
+				webhookResponse: webhookFailureMessage('not-registered'),
+				noWebhookResponse: false,
+			};
+		}
+
+		if (!rawBody) {
+			return {
+				webhookResponse: webhookFailureMessage('missing-body'),
+				noWebhookResponse: false,
+			};
+		}
+
+		const signingSecret = resolveSigningSecret(stored, webhookIdHeader);
+		if (!signingSecret) {
+			return {
+				webhookResponse: webhookFailureMessage('unknown-webhook-id'),
+				noWebhookResponse: false,
+			};
+		}
+
+		const verification = verifySpectrumWebhook({
+			rawBody,
+			signingSecret,
+			signature,
+			timestamp,
+		});
+
+		if (!verification.ok) {
+			this.logger.warn(
+				`[iMessage by Photon Trigger] Signature verification failed (${verification.reason})`,
+			);
+			return {
+				webhookResponse: webhookFailureMessage(verification.reason),
+				noWebhookResponse: false,
+			};
+		}
+
+		let payload: {
+			event?: string;
+			space?: { id?: string; platform?: string; phone?: string; type?: string };
+			message?: {
+				id?: string;
+				timestamp?: string;
+				sender?: { id?: string; platform?: string };
+				space?: { id?: string; platform?: string; phone?: string; type?: string };
+				content?: { type?: string; [key: string]: unknown };
+			};
+		};
+		try {
+			payload = JSON.parse(rawBody) as typeof payload;
+		} catch {
+			return { webhookResponse: 'invalid json body', noWebhookResponse: false };
+		}
+
+		if (!payload?.event) {
+			return { webhookResponse: 'missing event field', noWebhookResponse: false };
+		}
+
+		if (payload.event !== 'messages') {
+			throw new NodeOperationError(
+				this.getNode(),
+				`This trigger handles message events only (got "${payload.event}").`,
+			);
+		}
+
+		if (!payload.message) {
+			throw new NodeOperationError(this.getNode(), 'Webhook payload is missing the message field');
+		}
+
+		const spaceId = payload.message.space?.id ?? payload.space?.id ?? '';
+		const linePhone = parseWebhookLinePhone(payload);
+		const spaceType = parseWebhookSpaceType(payload);
+
+		const content = payload.message.content ?? {};
+
+		let text: string;
+		try {
+			text = parseTextContent(content);
+		} catch (err) {
+			throw new NodeOperationError(
+				this.getNode(),
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+
+		const sender = payload.message.sender?.id ?? '';
+		if (sender && looksLikeEmailAddress(sender)) {
+			throw new NodeOperationError(
+				this.getNode(),
+				appleIdEmailErrorMessage([sender]),
+			);
+		}
 
 		const output: INodeExecutionData = {
 			json: {
-				event: body.event,
-				guid: data.guid ?? null,
-				text: data.text ?? null,
-				sender: handle?.address ?? null,
-				chatGuid: chats?.[0]?.guid ?? null,
-				dateCreated: data.dateCreated ?? null,
-				isFromMe: data.isFromMe ?? false,
-				hasAttachments: Array.isArray(attachments) && attachments.length > 0,
-				rawData: data,
+				messageId: payload.message.id ?? null,
+				sender: sender || null,
+				text,
+				linePhone,
+				spaceId: spaceId || null,
+				spaceType,
+				timestamp: payload.message.timestamp ?? null,
 			},
 		};
 
-		return {
-			workflowData: [[output]],
-		};
+		return { workflowData: [[output]] };
 	}
 }
