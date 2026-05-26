@@ -3,7 +3,9 @@
 [![npm version](https://img.shields.io/npm/v/n8n-nodes-imessage.svg)](https://www.npmjs.com/package/n8n-nodes-imessage)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-![n8n now has native iMessage support](assets/hero.png)
+<p align="center">
+  <img src="assets/hero.jpg" alt="n8n now has native iMessage support" width="1024">
+</p>
 
 Send and receive iMessages from n8n workflows — powered by [Photon Spectrum](https://docs.photon.codes/spectrum-ts/providers/imessage).
 
