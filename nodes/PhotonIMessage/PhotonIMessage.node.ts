@@ -18,6 +18,113 @@ function generateTempGuid(): string {
 	return result;
 }
 
+function normalizeChatGuid(guid: string): string[] {
+	const trimmed = guid.trim();
+	const parts = trimmed.split(';');
+	if (parts.length === 3) {
+		const addr = parts[2];
+		const sep = parts[1];
+		return [`iMessage;${sep};${addr}`, `any;${sep};${addr}`];
+	}
+	if (!trimmed.includes(';')) {
+		return [`iMessage;-;${trimmed}`, `any;-;${trimmed}`, trimmed];
+	}
+	return [trimmed];
+}
+
+function extractAddressFromChatGuid(chatGuid: string): string | undefined {
+	const parts = chatGuid.split(';-;');
+	if (parts.length === 2 && parts[1]) return parts[1];
+	return undefined;
+}
+
+function resolveAddress(chatGuid: string): string | undefined {
+	const direct = extractAddressFromChatGuid(chatGuid);
+	if (direct) return direct;
+	for (const variant of normalizeChatGuid(chatGuid)) {
+		const address = extractAddressFromChatGuid(variant);
+		if (address) return address;
+	}
+	return undefined;
+}
+
+function chatGuidFromResponse(data: unknown): string | undefined {
+	if (!data || typeof data !== 'object') return undefined;
+	const record = data as Record<string, unknown>;
+	if (typeof record.guid === 'string') return record.guid;
+	if (record.chat && typeof record.chat === 'object') {
+		const guid = (record.chat as Record<string, unknown>).guid;
+		if (typeof guid === 'string') return guid;
+	}
+	return undefined;
+}
+
+function isNotFoundError(error: unknown): boolean {
+	if (isChatNotExistError(error)) return true;
+	if (!error || typeof error !== 'object') return false;
+	const err = error as { message?: string; description?: string; statusCode?: number; httpCode?: string };
+	if (err.statusCode === 404 || err.httpCode === '404') return true;
+	const text = [err.message, err.description]
+		.filter((part): part is string => typeof part === 'string')
+		.join(' ')
+		.toLowerCase();
+	return (
+		text.includes('404') ||
+		text.includes('not found') ||
+		text.includes('could not be found')
+	);
+}
+
+function parseTimestamp(value: string | undefined): number | undefined {
+	if (!value) return undefined;
+	const time = new Date(value).getTime();
+	return Number.isNaN(time) ? undefined : time;
+}
+
+function buildMessageQueryBody(params: {
+	chatGuid?: string;
+	limit?: number;
+	sort?: string;
+	after?: string;
+	before?: string;
+	with?: string[];
+	where?: Array<{ statement: string; args: Record<string, unknown> }>;
+}): Record<string, unknown> {
+	const body: Record<string, unknown> = {};
+	if (params.chatGuid) body.chatGuid = params.chatGuid;
+	if (params.limit !== undefined) body.limit = params.limit;
+	if (params.sort) body.sort = params.sort;
+	if (params.with) body.with = params.with;
+	if (params.where?.length) body.where = params.where;
+
+	const after = parseTimestamp(params.after);
+	const before = parseTimestamp(params.before);
+	if (after !== undefined) body.after = after;
+	if (before !== undefined) body.before = before;
+
+	return body;
+}
+
+function isChatNotExistError(error: unknown): boolean {
+	if (!error || typeof error !== 'object') return false;
+	const err = error as {
+		message?: string;
+		description?: string;
+		cause?: { message?: string };
+	};
+	const text = [err.message, err.description, err.cause?.message]
+		.filter((part): part is string => typeof part === 'string')
+		.join(' ')
+		.toLowerCase();
+	return text.includes('chat does not exist') || text.includes('chat not found');
+}
+
+function isInboundMessage(message: Record<string, unknown>): boolean {
+	if (message.isFromMe === false) return true;
+	if (message.is_from_me === 0 || message.is_from_me === false) return true;
+	return false;
+}
+
 export class PhotonIMessage implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'iMessage by Photon',
@@ -864,44 +971,147 @@ export class PhotonIMessage implements INodeType {
 		const credentials = await this.getCredentials('photonIMessageApi');
 		const baseUrl = (credentials.serverUrl as string).replace(/\/+$/, '');
 
-		const normalizeChatGuid = (guid: string): string[] => {
-			const parts = guid.split(';');
-			if (parts.length === 3) {
-				const addr = parts[2];
-				const sep = parts[1];
-				return [`iMessage;${sep};${addr}`, `any;${sep};${addr}`];
-			}
-			return [guid];
-		};
-
 		const enforceInboundFirstPolicy = async (chatGuid: string, itemIndex: number) => {
 			const guids = normalizeChatGuid(chatGuid);
-			const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
-			const guidArgs: Record<string, string> = {};
-			guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
+			const queryErrors: string[] = [];
 
-			const checkResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+			for (const variant of guids) {
+				try {
+					const checkResponse = await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'photonIMessageApi',
+						{
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/query`,
+							body: {
+								chatGuid: variant,
+								limit: 25,
+								sort: 'DESC',
+							},
+							json: true,
+						},
+					);
+
+					const messages = (checkResponse as { data?: unknown[] }).data;
+					if (
+						Array.isArray(messages) &&
+						messages.some((message) => isInboundMessage(message as Record<string, unknown>))
+					) {
+						return;
+					}
+				} catch (error) {
+					queryErrors.push((error as Error).message ?? String(error));
+				}
+			}
+
+			if (queryErrors.length === guids.length) {
+				throw new NodeOperationError(
+					this.getNode(),
+					'Could not verify inbound-first policy: the message query API failed for every chat GUID variant.',
+					{
+						itemIndex,
+						description:
+							`Check that Server URL is your advanced-imessage-kit runtime (for example https://xxx.imsgd.photon.codes) ` +
+							`and that chatGuid uses service;-;address format (for example iMessage;-;+15551234567). ` +
+							`Last error: ${queryErrors[queryErrors.length - 1]}`,
+					},
+				);
+			}
+
+			throw new NodeOperationError(
+				this.getNode(),
+				'Inbound-first policy: this contact has not messaged your number yet. To prevent spam, messages can only be sent to contacts who have initiated a conversation first.',
+				{ itemIndex },
+			);
+		};
+
+		const createChatForGuid = async (chatGuid: string, message?: string): Promise<string> => {
+			const address = resolveAddress(chatGuid);
+			if (!address) {
+				throw new NodeOperationError(
+					this.getNode(),
+					`Could not extract a recipient address from chatGuid "${chatGuid}". Use iMessage;-;+15551234567 or a bare phone/email.`,
+				);
+			}
+
+			const createResponse = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
 				method: 'POST' as IHttpRequestMethods,
-				url: `${baseUrl}/api/v1/message/query`,
+				url: `${baseUrl}/api/v1/chat/new`,
 				body: {
-					where: [
-						{ statement: `chat.guid IN (${guidPlaceholders})`, args: guidArgs },
-						{ statement: 'message.is_from_me = :fromMe', args: { fromMe: 0 } },
-					],
-					limit: 1,
-					sort: 'DESC',
+					addresses: [address],
+					method: 'private-api',
+					...(message ? { message } : {}),
 				},
 				json: true,
 			});
 
-			const inboundMessages = (checkResponse as { data?: unknown[] }).data;
-			if (!Array.isArray(inboundMessages) || inboundMessages.length === 0) {
-				throw new NodeOperationError(
-					this.getNode(),
-					'Inbound-first policy: this contact has not messaged your number yet. To prevent spam, messages can only be sent to contacts who have initiated a conversation first.',
-					{ itemIndex },
-				);
+			const data = (createResponse as { data?: unknown }).data ?? createResponse;
+			return chatGuidFromResponse(data) ?? normalizeChatGuid(chatGuid)[0];
+		};
+
+		const withChatGuidVariants = async <T>(
+			chatGuid: string,
+			request: (variant: string) => Promise<T>,
+		): Promise<T> => {
+			const variants = normalizeChatGuid(chatGuid);
+			let lastError: unknown;
+
+			for (const variant of variants) {
+				try {
+					return await request(variant);
+				} catch (error) {
+					lastError = error;
+					if (!isNotFoundError(error)) {
+						throw new NodeApiError(this.getNode(), error as JsonObject);
+					}
+				}
 			}
+
+			throw new NodeApiError(this.getNode(), lastError as JsonObject);
+		};
+
+		const queryMessagesForChatGuids = async (
+			guids: string[],
+			queryParams: {
+				limit?: number;
+				sort?: string;
+				after?: string;
+				before?: string;
+				with?: string[];
+				where?: Array<{ statement: string; args: Record<string, unknown> }>;
+			},
+		): Promise<Array<Record<string, unknown>>> => {
+			let lastError: unknown;
+
+			for (const variant of guids) {
+				try {
+					const response = await this.helpers.httpRequestWithAuthentication.call(
+						this,
+						'photonIMessageApi',
+						{
+							method: 'POST' as IHttpRequestMethods,
+							url: `${baseUrl}/api/v1/message/query`,
+							body: buildMessageQueryBody({ ...queryParams, chatGuid: variant }),
+							json: true,
+						},
+					);
+
+					const batch = (response as { data?: Array<Record<string, unknown>> }).data;
+					if (Array.isArray(batch) && batch.length > 0) {
+						return batch;
+					}
+				} catch (error) {
+					lastError = error;
+					if (!isNotFoundError(error)) {
+						throw new NodeApiError(this.getNode(), error as JsonObject);
+					}
+				}
+			}
+
+			if (lastError) {
+				throw new NodeApiError(this.getNode(), lastError as JsonObject);
+			}
+			return [];
 		};
 
 		for (let i = 0; i < items.length; i++) {
@@ -931,13 +1141,32 @@ export class PhotonIMessage implements INodeType {
 						if (additionalFields.effectId) body.effectId = additionalFields.effectId;
 						if (additionalFields.selectedMessageGuid) body.selectedMessageGuid = additionalFields.selectedMessageGuid;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/text`,
-							body,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
+						try {
+							const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+								method: 'POST' as IHttpRequestMethods,
+								url: `${baseUrl}/api/v1/message/text`,
+								body,
+								json: true,
+							});
+							responseData = (response as { data?: unknown }).data ?? response;
+						} catch (error) {
+							if (!isChatNotExistError(error)) {
+								throw new NodeApiError(this.getNode(), error as JsonObject, { itemIndex: i });
+							}
+
+							const resolvedGuid = await createChatForGuid(chatGuid, message);
+							const retryResponse = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/text`,
+									body: { ...body, chatGuid: resolvedGuid },
+									json: true,
+								},
+							);
+							responseData = (retryResponse as { data?: unknown }).data ?? retryResponse;
+						}
 
 				} else if (operation === 'sendAttachment') {
 					const chatGuid = this.getNodeParameter('chatGuid', i) as string;
@@ -955,13 +1184,32 @@ export class PhotonIMessage implements INodeType {
 						if (additionalFields.fileName) body.name = additionalFields.fileName;
 						if (additionalFields.isAudioMessage) body.isAudioMessage = additionalFields.isAudioMessage;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/attachment`,
-							body,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
+						try {
+							const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+								method: 'POST' as IHttpRequestMethods,
+								url: `${baseUrl}/api/v1/message/attachment`,
+								body,
+								json: true,
+							});
+							responseData = (response as { data?: unknown }).data ?? response;
+						} catch (error) {
+							if (!isChatNotExistError(error)) {
+								throw new NodeApiError(this.getNode(), error as JsonObject, { itemIndex: i });
+							}
+
+							const resolvedGuid = await createChatForGuid(chatGuid);
+							const retryResponse = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/attachment`,
+									body: { ...body, chatGuid: resolvedGuid },
+									json: true,
+								},
+							);
+							responseData = (retryResponse as { data?: unknown }).data ?? retryResponse;
+						}
 
 					} else if (operation === 'unsendMessage') {
 						const messageGuid = this.getNodeParameter('messageGuid', i) as string;
@@ -1029,18 +1277,20 @@ export class PhotonIMessage implements INodeType {
 						};
 						const partIndex = reactFields.partIndex ?? 0;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/react`,
-							body: {
-								chatGuid,
-								selectedMessageGuid: messageGuid,
-								reaction,
-								partIndex,
-							},
-							json: true,
+						responseData = await withChatGuidVariants(chatGuid, async (variant) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+								method: 'POST' as IHttpRequestMethods,
+								url: `${baseUrl}/api/v1/message/react`,
+								body: {
+									chatGuid: variant,
+									selectedMessageGuid: messageGuid,
+									reaction,
+									partIndex,
+								},
+								json: true,
+							});
+							return (response as { data?: unknown }).data ?? response;
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
 
 					} else if (operation === 'searchMessages') {
 						const query = this.getNodeParameter('query', i) as string;
@@ -1057,28 +1307,31 @@ export class PhotonIMessage implements INodeType {
 								args: { text: `%${query}%` },
 							},
 						];
+						let messages: Array<Record<string, unknown>> = [];
 						if (additionalFields.chatGuid) {
-							const guids = normalizeChatGuid(additionalFields.chatGuid);
-							const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
-							const guidArgs: Record<string, string> = {};
-							guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
-							where.push({ statement: `chat.guid IN (${guidPlaceholders})`, args: guidArgs });
+							messages = await queryMessagesForChatGuids(normalizeChatGuid(additionalFields.chatGuid), {
+								where,
+								limit,
+								sort: additionalFields.sort ?? 'DESC',
+							});
+						} else {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/query`,
+									body: buildMessageQueryBody({
+										where,
+										limit,
+										sort: additionalFields.sort ?? 'DESC',
+									}),
+									json: true,
+								},
+							);
+							const batch = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
+							messages = Array.isArray(batch) ? batch : [];
 						}
-
-						const body: Record<string, unknown> = {
-							where,
-							limit,
-							sort: additionalFields.sort ?? 'DESC',
-						};
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/query`,
-							body,
-							json: true,
-						});
-
-						const messages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(messages)) {
 							for (const msg of messages) {
 							returnData.push({
@@ -1101,44 +1354,14 @@ export class PhotonIMessage implements INodeType {
 						};
 
 						const guids = normalizeChatGuid(chatGuid);
-						const guidPlaceholders = guids.map((_, idx) => `:guid${idx}`).join(', ');
-						const guidArgs: Record<string, string> = {};
-						guids.forEach((g, idx) => { guidArgs[`guid${idx}`] = g; });
 
-						const where: Array<{ statement: string; args: Record<string, unknown> }> = [
-							{
-								statement: `chat.guid IN (${guidPlaceholders})`,
-								args: guidArgs,
-							},
-						];
-						if (additionalFields.after) {
-							const afterTime = new Date(additionalFields.after as string).getTime();
-							if (!Number.isNaN(afterTime)) {
-								where.push({ statement: 'message.date > :after', args: { after: afterTime } });
-							}
-						}
-						if (additionalFields.before) {
-							const beforeTime = new Date(additionalFields.before as string).getTime();
-							if (!Number.isNaN(beforeTime)) {
-								where.push({ statement: 'message.date < :before', args: { before: beforeTime } });
-							}
-						}
-
-						const body: Record<string, unknown> = {
-							where,
+						const messages = await queryMessagesForChatGuids(guids, {
 							limit,
 							sort: additionalFields.sort ?? 'DESC',
+							after: additionalFields.after,
+							before: additionalFields.before,
 							with: ['chat', 'handle', 'attachment'],
-						};
-
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/query`,
-							body,
-							json: true,
 						});
-
-						const messages = (response as { data?: Array<Record<string, unknown>> }).data ?? response;
 						if (Array.isArray(messages)) {
 							for (const msg of messages) {
 							returnData.push({
@@ -1222,30 +1445,42 @@ export class PhotonIMessage implements INodeType {
 					} else if (operation === 'markChatRead') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/read`,
-							json: true,
+						responseData = await withChatGuidVariants(chatGuid, async (variant) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/chat/${encodeURIComponent(variant)}/read`,
+									json: true,
+								},
+							);
+							return (response as { data?: unknown }).data ?? response;
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
 
 					} else if (operation === 'startTyping') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 
-						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/typing`,
-							json: true,
+						await withChatGuidVariants(chatGuid, async (variant) => {
+							await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+								method: 'POST' as IHttpRequestMethods,
+								url: `${baseUrl}/api/v1/chat/${encodeURIComponent(variant)}/typing`,
+								json: true,
+							});
+							return variant;
 						});
 						responseData = { typing: true, chatGuid };
 
 					} else if (operation === 'stopTyping') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 
-						await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'DELETE' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/chat/${encodeURIComponent(chatGuid)}/typing`,
-							json: true,
+						await withChatGuidVariants(chatGuid, async (variant) => {
+							await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
+								method: 'DELETE' as IHttpRequestMethods,
+								url: `${baseUrl}/api/v1/chat/${encodeURIComponent(variant)}/typing`,
+								json: true,
+							});
+							return variant;
 						});
 						responseData = { typing: false, chatGuid };
 					}
@@ -1266,22 +1501,37 @@ export class PhotonIMessage implements INodeType {
 							schedule.interval = 1;
 						}
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/schedule`,
-							body: {
-								type: 'send-message',
-								payload: {
-									chatGuid,
-									message,
-									method: 'private-api',
+						const scheduleRequest = async (resolvedGuid: string) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/schedule`,
+									body: {
+										type: 'send-message',
+										payload: {
+											chatGuid: resolvedGuid,
+											message,
+											method: 'private-api',
+										},
+										scheduledFor: new Date(sendAt).getTime(),
+										schedule,
+									},
+									json: true,
 								},
-								scheduledFor: new Date(sendAt).getTime(),
-								schedule,
-							},
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
+							);
+							return (response as { data?: unknown }).data ?? response;
+						};
+
+						try {
+							responseData = await withChatGuidVariants(chatGuid, scheduleRequest);
+						} catch (error) {
+							if (!isChatNotExistError(error) && !isNotFoundError(error)) {
+								throw new NodeApiError(this.getNode(), error as JsonObject, { itemIndex: i });
+							}
+							responseData = await scheduleRequest(await createChatForGuid(chatGuid));
+						}
 
 					} else if (operation === 'listScheduledMessages') {
 						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
@@ -1325,58 +1575,90 @@ export class PhotonIMessage implements INodeType {
 							.map((o) => o.option.trim())
 							.filter(Boolean);
 
-						const body: Record<string, unknown> = {
-							chatGuid,
+						const pollBody: Record<string, unknown> = {
 							options,
 						};
-						if (pollTitle) body.title = pollTitle;
+						if (pollTitle) pollBody.title = pollTitle;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/create`,
-							body,
-							json: true,
-						});
-						responseData = (response as { data?: unknown }).data ?? response;
+						const createPollRequest = async (resolvedGuid: string) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/poll/create`,
+									body: { ...pollBody, chatGuid: resolvedGuid },
+									json: true,
+								},
+							);
+							return (response as { data?: unknown }).data ?? response;
+						};
+
+						try {
+							responseData = await withChatGuidVariants(chatGuid, createPollRequest);
+						} catch (error) {
+							if (!isChatNotExistError(error) && !isNotFoundError(error)) {
+								throw new NodeApiError(this.getNode(), error as JsonObject, { itemIndex: i });
+							}
+							responseData = await createPollRequest(await createChatForGuid(chatGuid));
+						}
 
 					} else if (operation === 'vote') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
 						const optionIdentifier = this.getNodeParameter('optionIdentifier', i) as string;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/vote`,
-							body: { chatGuid, pollMessageGuid, optionIdentifier },
-							json: true,
+						responseData = await withChatGuidVariants(chatGuid, async (variant) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/poll/vote`,
+									body: { chatGuid: variant, pollMessageGuid, optionIdentifier },
+									json: true,
+								},
+							);
+							return (response as { data?: unknown }).data ?? response;
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
 
 					} else if (operation === 'unvote') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
 						const optionIdentifier = this.getNodeParameter('optionIdentifier', i) as string;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/unvote`,
-							body: { chatGuid, pollMessageGuid, optionIdentifier },
-							json: true,
+						responseData = await withChatGuidVariants(chatGuid, async (variant) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/poll/unvote`,
+									body: { chatGuid: variant, pollMessageGuid, optionIdentifier },
+									json: true,
+								},
+							);
+							return (response as { data?: unknown }).data ?? response;
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
 
 					} else if (operation === 'addOption') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 						const pollMessageGuid = this.getNodeParameter('pollMessageGuid', i) as string;
 						const optionText = this.getNodeParameter('optionText', i) as string;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/message/poll/add-option`,
-							body: { chatGuid, pollMessageGuid, optionText },
-							json: true,
+						responseData = await withChatGuidVariants(chatGuid, async (variant) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/message/poll/add-option`,
+									body: { chatGuid: variant, pollMessageGuid, optionText },
+									json: true,
+								},
+							);
+							return (response as { data?: unknown }).data ?? response;
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
 					}
 
 				// ===== CONTACT =====
@@ -1384,13 +1666,19 @@ export class PhotonIMessage implements INodeType {
 					if (operation === 'shareContactCard') {
 						const chatGuid = this.getNodeParameter('chatGuid', i) as string;
 
-						const response = await this.helpers.httpRequestWithAuthentication.call(this, 'photonIMessageApi', {
-							method: 'POST' as IHttpRequestMethods,
-							url: `${baseUrl}/api/v1/contact/share`,
-							body: { chatGuid },
-							json: true,
+						responseData = await withChatGuidVariants(chatGuid, async (variant) => {
+							const response = await this.helpers.httpRequestWithAuthentication.call(
+								this,
+								'photonIMessageApi',
+								{
+									method: 'POST' as IHttpRequestMethods,
+									url: `${baseUrl}/api/v1/contact/share`,
+									body: { chatGuid: variant },
+									json: true,
+								},
+							);
+							return (response as { data?: unknown }).data ?? response;
 						});
-						responseData = (response as { data?: unknown }).data ?? response;
 					}
 
 				// ===== HANDLE =====
@@ -1426,7 +1714,7 @@ export class PhotonIMessage implements INodeType {
 				});
 					continue;
 				}
-				throw new NodeApiError(this.getNode(), error as JsonObject);
+				throw new NodeApiError(this.getNode(), error as JsonObject, { itemIndex: i });
 			}
 		}
 
