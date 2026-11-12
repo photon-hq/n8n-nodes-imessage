@@ -1,7 +1,7 @@
 # n8n-nodes-imessage
 
 [![npm version](https://img.shields.io/npm/v/n8n-nodes-imessage.svg)](https://www.npmjs.com/package/n8n-nodes-imessage)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 <p align="center">
   <img src="assets/hero.jpg" alt="n8n now has native iMessage support" width="1024">
@@ -60,4 +60,4 @@ npm run dev:tunnel
 
 ## License
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)
